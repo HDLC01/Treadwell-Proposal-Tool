@@ -122,6 +122,34 @@ def test_a_client_that_stays_connected_is_still_refused_after_the_wait(dbs, bd_a
     assert_nothing_written(dbs)
 
 
+@pytest.mark.parametrize("command", ["check", "forward"])
+@pytest.mark.parametrize("change,refused", [
+    ("alter table public.contacts add column nickname text",
+     "refusing: the old database: public.contacts has a column the map does not know: nickname"),
+    ("insert into public.schema_migrations (name) values ('005_later.sql')",
+     "refusing: the old database's migrations ledger is not BD's original four (001 to 004): 005_later.sql is"
+     " unexpected"),
+], ids=["a-column", "a-ledger-row"])
+def test_a_change_made_by_a_client_on_its_way_out_is_seen(dbs, bd_admin, capsys, command, change, refused):
+    """The checks after the wait read the old database as it is once the leaving client has gone,
+    not as it was when the preflight began: a schema or ledger change it commits on its way out is
+    refused like any other."""
+    pid = src.leaving_client(dbs.old, seconds=1, then=change)
+    assert src.listed(bd_admin, pid)
+    assert "nickname" not in src.columns_of(dbs.old, "public", "contacts")      # not made yet
+    assert src.scalar(dbs.old, "select count(*) from public.schema_migrations") == 4
+    if command == "check":
+        code, err = cutover.check(dbs.old, dbs.app), capsys.readouterr().err
+    else:
+        code, err = cutover.forward(dbs.old, dbs.app, dbs.record), capsys.readouterr().err
+    assert not src.listed(bd_admin, pid)
+    assert "nickname" in src.columns_of(dbs.old, "public", "contacts") \
+        or src.scalar(dbs.old, "select count(*) from public.schema_migrations") == 5   # it was made
+    assert code == EXIT_REFUSED, err
+    assert refused_lines(err) == [refused]
+    assert_nothing_written(dbs)
+
+
 # A plain login on the old database that is neither a superuser nor in pg_read_all_stats. Test
 # servers only; this password guards nothing.
 OLD_READER, OLD_READER_PASSWORD = "bd_test_old_reader", "bd-test-old-reader-only"

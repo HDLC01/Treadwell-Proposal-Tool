@@ -434,15 +434,21 @@ def refused_lines(err: str) -> list:
 
 
 # ── a client on its way out ─────────────────────────────────────────────────────────────────────
-def leaving_client(url: str, seconds: float) -> int:
+def leaving_client(url: str, seconds: float, then: str | None = None) -> int:
     """A client that has already disconnected while Postgres still lists its session. Every client
     is in that state for a moment after it disconnects (it never waits for its backend to exit:
     1 to 70 ms measured on a local server); this one closes in the middle of a pg_sleep, so its
-    backend notices only when the sleep ends and the moment lasts `seconds`. Returns its pid."""
+    backend notices only when the sleep ends and the moment lasts `seconds`. `then`, one statement,
+    runs and commits when the sleep ends, just before the backend exits (a client that changes the
+    database on its way out). Returns its pid."""
     conn = _bd_db.connect(url)
     conn.execute("set client_connection_check_interval = 0")       # the default: no early notice
     pid = conn.info.backend_pid
-    conn.pgconn.send_query(("select pg_catalog.pg_sleep(%s)" % float(seconds)).encode())
+    query = "select pg_catalog.pg_sleep(%s)" % float(seconds)
+    if then is not None:
+        query = "do $leave$ begin perform pg_catalog.pg_sleep(%s); execute $then$%s$then$; end $leave$" % (
+            float(seconds), then)
+    conn.pgconn.send_query(query.encode())
     conn.pgconn.flush()
     conn.close()
     return pid

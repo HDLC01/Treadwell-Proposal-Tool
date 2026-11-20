@@ -481,10 +481,17 @@ def preflight_forward(old: Any, tool: Any, record: pathlib.Path | None) -> list:
 
 def _shared_preflight(old: Any, tool: Any) -> tuple:
     """The checks both directions run: (problems, whether the old database's tables are the map's,
-    whether schema bd's are, how many other clients the old database has). Leaves the old session's
-    transaction open (the reverse copy locks in it); ends the tool session's."""
+    whether schema bd's are, how many other clients the old database has). Leaves the old session in
+    an open transaction begun after the wait (the reverse copy locks in it); ends the tool session's.
+
+    The old session's first transaction ends once the other clients are counted, so every check after
+    it reads the old database as it is after the wait: check and forward open that session repeatable
+    read, whose snapshot the first query takes (counting the clients first would not help: the count's
+    own query would take it), so a change a client commits on its way out would otherwise go unseen.
+    Nothing is locked yet, so the commit releases nothing."""
     problems = _old_login_problems(old)
     others = _other_clients(old)
+    old.commit()
     if others:
         problems.append("refusing: %d other client%s connected to the old database" % (
             others, " is" if others == 1 else "s are"))
