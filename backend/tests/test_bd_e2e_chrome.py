@@ -326,9 +326,12 @@ def test_a_signed_out_visit_signs_in_and_comes_back_to_bd(env, start):
         page.wait_for_url("**/login.html", timeout=10000)
         assert page.evaluate("new URL(location.href).pathname") == "/login.html"
         assert page.evaluate("sessionStorage.getItem('tw_return_to')") == "/bd/"
+        # The first login page decides who is signed in only after /api/public-config answers. Signing
+        # in before then let THAT page find the session, use the return up and go to /bd/ while the
+        # test's own goto was loading a second login page, which then had no return and went home
+        # (or the goto was aborted, net::ERR_ABORTED). So the first page is let settle first.
+        page.wait_for_load_state("networkidle")
         p.sign_in(SUPER)
-        # The login page sends a signed-in person straight on, which can abort the navigation goto
-        # is still waiting on (net::ERR_ABORTED); "commit" returns as soon as the page starts loading.
         page.goto(p.base + "/login.html", wait_until="commit")
         page.wait_for_url(re.compile(r".*/bd/$"), timeout=10000)
         assert _sub_text(page) == CHOOSE, "back on This Week, signed in as the super admin"
