@@ -961,6 +961,11 @@
 .bd-app .ct-pair-text { overflow-wrap: anywhere; }
 .bd-app .ct-pair-text strong { font-weight: 700; }
 .bd-app .ct-pair-acts { gap: 8px; margin-top: 8px; }
+/* A pair's buttons carry an account name ("Merge into Prairie Ridge Builders, Inc."), wider than the note
+   on a phone in a wide font (Linux's DejaVu Sans, #827), so the label wraps inside its button rather than
+   pushing the page sideways. At desktop width it stays one line, as in the mock-up. */
+.bd-app .ct-pair-acts .btn { min-width: 0; max-width: 100%; padding-top: 6px; padding-bottom: 6px; white-space: normal;
+  overflow-wrap: anywhere; text-align: center; }
 .bd-app .ct-pairs-none { display: flex; align-items: center; gap: 8px; color: var(--bd-ok); font-size: 14px; font-weight: 500; }
 .bd-app .ct-merged-h { margin: 16px 0 8px; }                 /* an .eyebrow */
 .bd-app .ct-merged { margin: 0; padding: 0 14px; list-style: none; background: var(--bd-card); border: 1px solid var(--bd-line);

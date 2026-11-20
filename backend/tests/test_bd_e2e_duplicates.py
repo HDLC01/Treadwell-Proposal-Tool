@@ -422,3 +422,79 @@ def test_on_a_phone_merge_is_a_bottom_sheet_and_nothing_scrolls_sideways(page_as
     live_toast(pg).locator(".toast-act").click()
     expect(pairs(pg)).to_have_count(2)
     assert names(pg) == FILTER_NAMES
+
+
+SMALLEST_PHONE = {"width": 320, "height": 568}
+
+# Each of a pair's buttons against its note's text column (.ct-pair-main), and each Recently merged
+# row's parts against the list's box: how far each edge sits outside (above 0 is outside), and how far
+# a label runs past its own button. Per element, so a failure names the culprit.
+FITS = r"""() => {
+  const out = [];
+  const edge = (e, box) => { const r = e.getBoundingClientRect();
+    return {what: e.id || e.className, text: e.innerText.trim(), outLeft: box.left - r.left,
+            outRight: r.right - box.right, height: r.height, clipped: e.scrollWidth - e.clientWidth}; };
+  for (const li of document.querySelectorAll('#ct-dupes .ct-pair')) {
+    const col = li.querySelector('.ct-pair-main').getBoundingClientRect();
+    for (const b of li.querySelectorAll('.ct-pair-acts .btn')) out.push(edge(b, col));
+  }
+  for (const ul of document.querySelectorAll('#ct-dupes .ct-merged')) {
+    const s = getComputedStyle(ul), r = ul.getBoundingClientRect();
+    const box = {left: r.left + parseFloat(s.paddingLeft) + parseFloat(s.borderLeftWidth),
+                 right: r.right - parseFloat(s.paddingRight) - parseFloat(s.borderRightWidth)};
+    for (const e of ul.querySelectorAll('.ct-merged-main, .ct-unmerge')) out.push(edge(e, box));
+  }
+  return out;
+}"""
+
+# What sticks out past the right of the window, outside any element that scrolls or clips sideways
+# itself (the filter chips scroll in their own row): the culprit when the page scrolls sideways.
+STICKING_OUT = r"""() => [...document.querySelectorAll('body *')].filter(e => {
+  const r = e.getBoundingClientRect();
+  if (!r.width || r.right <= window.innerWidth + 0.5) return false;
+  for (let p = e.parentElement; p && p !== document.body; p = p.parentElement) {
+    if (getComputedStyle(p).overflowX !== 'visible') return false;
+  }
+  return true;
+}).map(e => (e.id ? '#' + e.id : e.tagName.toLowerCase() + '.' + [...e.classList].join('.')) +
+  ' ' + JSON.stringify(e.innerText.trim().slice(0, 60)) + ' right=' + e.getBoundingClientRect().right)"""
+
+
+def assert_fits(pg):
+    pg.evaluate("() => document.fonts.ready.then(() => true)")
+    fits = pg.evaluate(FITS)
+    for f in fits:
+        assert f["outLeft"] <= 0.5 and f["outRight"] <= 0.5, f      # inside its note / its list
+        assert f["clipped"] <= 0, f                                 # the label inside its button
+    assert sideways(pg) <= 1, pg.evaluate(STICKING_OUT)
+    return fits
+
+
+@pytest.mark.parametrize("viewport", [PHONE, SMALLEST_PHONE], ids=["390", "320"])
+def test_on_a_phone_a_long_merge_name_wraps_inside_its_note(page_as, expect, viewport):
+    """"Merge into Prairie Ridge Builders, Inc." is wider than its note's text column at 320 in any
+    font, and at 390 in the DejaVu Sans CI's Linux draws (#827's failure: 4 px of sideways scroll that
+    Windows' narrower Segoe UI hid). So it is measured per button at both widths: a label that cannot
+    wrap shows here on every machine, not only on the ones whose fonts are wide."""
+    _, pg = open_filter(page_as, CASEY, viewport)
+    fits = assert_fits(pg)
+    assert [f["what"] for f in fits] == ["ct-merge-12-13", "ct-keep-12-13", "ct-merge-10-11", "ct-keep-10-11"]
+    assert all(f["height"] >= 44 for f in fits), fits                # still a finger-sized target
+    merge(pg, expect, "10-11")
+    expect(pg.locator("#ct-dupes .ct-merged-row")).to_have_count(1)
+    expect(toasts(pg)).to_contain_text("Merged.")
+    fits = assert_fits(pg)
+    assert [f["what"] for f in fits] == ["ct-merge-12-13", "ct-keep-12-13", "ct-merged-main", "ct-unmerge-1"], fits
+    assert all(f["height"] >= 44 for f in fits if f["what"] != "ct-merged-main"), fits
+
+
+def test_on_a_desktop_each_pairs_buttons_sit_side_by_side_on_one_line(page_as):
+    """The mock-up at 1280: Merge into … and Keep separate side by side, each one line at btn-sm's 36 px.
+    A wrap that also changed the wide layout would show here as a taller button or a second row."""
+    _, pg = open_filter(page_as, CASEY, DESKTOP)
+    pg.evaluate("() => document.fonts.ready.then(() => true)")
+    for k in ("12-13", "10-11"):
+        m = pg.locator("#ct-merge-" + k).bounding_box()
+        s = pg.locator("#ct-keep-" + k).bounding_box()
+        assert abs(m["y"] - s["y"]) <= 0.5 and abs(m["height"] - 36) <= 0.5 and abs(s["height"] - 36) <= 0.5, (m, s)
+        assert s["x"] >= m["x"] + m["width"], (m, s)
