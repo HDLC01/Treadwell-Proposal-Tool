@@ -13,6 +13,9 @@ own Contacts page and the 2026-11-20 decisions on #810:
   add_contact       Add contact, and "Add someone here" in an opened account
   admin_area        To tidy this Friday, with the unknown calls (GET /api/bd/admin/unmatched-calls)
   move_company      the "..." button on each company row (Q5: never the assistant)
+  merge_companies   the likely duplicate BD accounts (#811, Q21, Q36: the assistant and the admins):
+                    GET /api/bd/contacts/accounts/duplicates, the "Same account?" notes and Recently
+                    merged on the Possible duplicates filter, and the pairs in To tidy's count
 
 The data is made up, shaped like the fixture seed's (bd/ops/fixture_seed.py), on its Wednesday,
 2026-11-04: Bluestem Logistics (3 BD people; Avery and Blair, the two salespeople there, tie: Avery
@@ -43,7 +46,7 @@ PEOPLE = {"salesperson": (1, "Avery Quill"), "assistant": (3, "Casey Moret"), "m
           "admin": (5, "Emery Stoll"), "super_admin": (6, "Frankie Oduya")}
 
 IDS = ["ct-note", "ct-sub", "ct-import", "ct-import-file", "ct-add", "ct-tidy", "ct-tidy-cards", "ct-unknown",
-       "ct-tab-bd", "ct-tab-maintenance", "ct-tools", "ct-q", "ct-sort", "ct-chips", "ct-count", "ct-list"]
+       "ct-tab-bd", "ct-tab-maintenance", "ct-tools", "ct-q", "ct-sort", "ct-chips", "ct-count", "ct-dupes", "ct-list"]
 
 AVERY = {"id": 1, "name": "Avery Quill"}
 BLAIR = {"id": 2, "name": "Blair Fenn"}
@@ -114,11 +117,14 @@ def page_scripts():
     return [s.lstrip("/") for s in srcs if s.startswith("/bd/")]
 
 
-def run(tmp_path, bd_me, search="", search_answer=None, bd=None, maint=None, name="s"):
+def run(tmp_path, bd_me, search="", search_answer=None, bd=None, maint=None, name="s", dupes=None):
     """The page, started as `bd_me`, at contacts.html`search`. The harness answers a route by its path,
-    so the two tabs' answers are told apart by a stand-in that the page's own category picks."""
+    so the two tabs' answers are told apart by a stand-in that the page's own category picks. `dupes`
+    is the duplicates route's whole answer ({status, body}); left out, that route is not there (404)."""
     require_node()
     res = responses(search_answer)
+    if dupes is not None:
+        res["GET /api/bd/contacts/accounts/duplicates"] = dupes
     bd_items = [PRAIRIE, BLUESTEM] if bd is None else bd
     m_items = [KAW] if maint is None else maint
     res.pop("GET /api/bd/contacts/accounts")
@@ -155,12 +161,13 @@ def shown(out, el):
 ACCOUNTS = ["GET /api/bd/contacts/accounts?category=bd&limit=500&offset=0",
             "GET /api/bd/contacts/accounts?category=maintenance&limit=500&offset=0"]
 TIDY = ["GET /api/bd/admin/imports?limit=1", "GET /api/bd/admin/unmatched-calls"]
+DUPES = ["GET /api/bd/contacts/accounts/duplicates?limit=500&offset=0"]
 ASKED = {
     "salesperson": ACCOUNTS,
-    "assistant": sorted(ACCOUNTS + TIDY),
+    "assistant": sorted(ACCOUNTS + TIDY + DUPES),
     "manager": ACCOUNTS,
-    "admin": sorted(ACCOUNTS + TIDY),
-    "super_admin": sorted(ACCOUNTS + TIDY),
+    "admin": sorted(ACCOUNTS + TIDY + DUPES),
+    "super_admin": sorted(ACCOUNTS + TIDY + DUPES),
 }
 # (Import, Add contact, To tidy, the "..." menu): by hand from BD's role checks and Q5.
 CONTROLS = {
@@ -369,6 +376,187 @@ def test_to_tidy_counts_what_needs_doing(tmp_path):
     cards = text(out, "ct-tidy-cards")
     assert "0 Duplicates" in cards and "1 To confirm" in cards and "1 Unknown call" in cards
     assert shown(out, "ct-unknown") is False, "the calls open from their card"
+
+
+# ── likely duplicate BD accounts (#811: merge_companies, the assistant and the admins) ────────────
+# The fixture seed's two likely pairs, as GET /api/bd/contacts/accounts/duplicates answers them
+# (docs/bd/api-contract.md), with Prairie's names made to need escaping and a phone hint added.
+COTTON_A = {"id": 12, "name": "Cottonwood & Sons Paving", "city": "Olathe", "industry": "Paving", "category": "bd",
+            "people_count": 1, "owner": AVERY, "other_owners": 0, "last_live_at": None,
+            "people": [person(23, "Marisa Cole", AVERY, title="Owner")]}
+COTTON_B = {"id": 13, "name": "Cottonwood Sons Paving Co.", "city": "Olathe", "industry": "Paving", "category": "bd",
+            "people_count": 1, "owner": BLAIR, "other_owners": 0, "last_live_at": None,
+            "people": [person(24, "Theo Banks", BLAIR, title="Operations")]}
+PRAIRIE_INC = {"id": 11, "name": "Prairie Ridge Builders, Inc.", "city": "Overland Park", "industry": "General contractor",
+               "category": "bd", "people_count": 2, "owner": BLAIR, "other_owners": 0, "last_live_at": None,
+               "people": [person(33, "D. Whitlow", BLAIR, duplicate_of={"contact_id": 21, "name": "Dana Whitlow"}),
+                          person(22, "Rory Sandell", BLAIR, title="Estimator")]}
+EVERY_BD = [BLUESTEM, COTTON_A, COTTON_B, PRAIRIE, PRAIRIE_INC]
+
+PAIR_COTTON = {"a": {"id": 12, "name": "Cottonwood & Sons Paving", "city": "Olathe", "people_count": 1},
+               "b": {"id": 13, "name": "Cottonwood Sons Paving Co.", "city": "Olathe", "people_count": 1},
+               "hints": {"phones": [], "email_domains": ["cottonwoodpaving.example.com"]}}
+PAIR_PRAIRIE = {"a": {"id": 10, "name": "Prairie Ridge <b>Builders</b> LLC", "city": "Overland Park", "people_count": 1},
+                "b": {"id": 11, "name": "Prairie Ridge Builders, Inc.", "city": "Overland Park", "people_count": 2},
+                "hints": {"phones": ["+19135550101"], "email_domains": ["prairieridge.example.com"]}}
+MERGE_41 = {"id": 41, "account": {"id": 13, "name": "Cottonwood Sons Paving Co."},
+            "into": {"id": 12, "name": "Cottonwood & Sons Paving"}, "name_before": "Cottonwood & Sons Paving",
+            "people": 1, "at": "2026-11-04T10:30:00-06:00", "by": {"id": 3, "name": "Casey Moret"}}
+# A merge that kept the merged-away account's name, so the survivor was renamed.
+MERGE_40 = {"id": 40, "account": {"id": 19, "name": "Kaw-Point Electric LLC"},
+            "into": {"id": 20, "name": "Kaw-Point Electric LLC"}, "name_before": "Kaw Point Electric",
+            "people": 2, "at": "2026-11-03T15:00:00-06:00", "by": {"id": 5, "name": "Emery Stoll"}}
+
+
+def pairs_answer(items, merges=()):
+    return ok({"total": len(items), "items": list(items), "merges": list(merges)})
+
+
+def words_of(fragment):
+    return " ".join(htmlmod.unescape(re.sub(r"<[^>]+>", " ", fragment)).split())
+
+
+def notes(out):
+    """The words of each "Same account?" note, in order."""
+    return [words_of(m) for m in re.findall(r'<p class="ct-pair-text">(.*?)</p>', markup(out, "ct-dupes"), re.S)]
+
+
+def buttons(out, act):
+    """The visible words of each data-act=`act` button in the duplicates view (screen-reader-only words cut)."""
+    html = re.sub(r'<span class="sr-only">.*?</span>', "", markup(out, "ct-dupes"))
+    return [words_of(m) for m in re.findall(r'<button[^>]*data-act="%s"[^>]*>(.*?)</button>' % act, html, re.S)]
+
+
+def test_the_duplicates_filter_shows_each_likely_pair_as_a_same_account_note(tmp_path):
+    """The mock-up's note: both names, each one's people, and the hint, worked by hand. Merge offers the
+    account with more people (Prairie Ridge Builders, Inc., 2 people), the first on a tie (Cottonwood)."""
+    out = run(tmp_path, me("assistant"), search="?filter=dupes", bd=EVERY_BD,
+              dupes=pairs_answer([PAIR_COTTON, PAIR_PRAIRIE]))
+    assert shown(out, "ct-dupes")
+    assert notes(out) == [
+        "Same account? “Cottonwood & Sons Paving” (1 person) and “Cottonwood Sons Paving Co.” (1 person). "
+        "Both use the email domain cottonwoodpaving.example.com.",
+        "Same account? “Prairie Ridge <b>Builders</b> LLC” (1 person) and “Prairie Ridge Builders, Inc.” (2 people). "
+        "Both have the phone 913-555-0101 and use the email domain prairieridge.example.com.",
+    ]
+    assert buttons(out, "merge") == ["Merge into Cottonwood & Sons Paving", "Merge into Prairie Ridge Builders, Inc."]
+    assert buttons(out, "keep") == ["Keep separate", "Keep separate"]
+    assert "<b>Builders</b>" not in markup(out, "ct-dupes"), "a company name goes in as text"
+    assert '<button type="button" class="chip-filter" data-chip="dupes" aria-pressed="true">' in markup(out, "ct-chips")
+
+
+def test_a_pair_with_no_hint_says_so(tmp_path):
+    bare = dict(PAIR_COTTON, hints={"phones": [], "email_domains": []})
+    out = run(tmp_path, me("admin"), search="?filter=dupes", bd=EVERY_BD, dupes=pairs_answer([bare]))
+    assert notes(out) == ["Same account? “Cottonwood & Sons Paving” (1 person) and “Cottonwood Sons Paving Co.” "
+                          "(1 person). No shared phone or email domain."]
+
+
+def test_the_duplicates_filter_lists_the_flagged_people_and_both_accounts_of_each_pair(tmp_path):
+    """D. Whitlow (Prairie Ridge Builders, Inc.) is a flagged person; Cottonwood and Prairie are the two
+    pairs. Bluestem is neither, so it is the one account left out."""
+    out = run(tmp_path, me("super_admin"), search="?filter=dupes", bd=EVERY_BD,
+              dupes=pairs_answer([PAIR_COTTON, PAIR_PRAIRIE]))
+    assert rows(out)[0] == [(12, "bd"), (13, "bd"), (10, "bd"), (11, "bd")]
+
+
+def test_to_tidy_counts_the_pairs_with_the_flagged_people(tmp_path):
+    """1 flagged person (D. Whitlow) + 2 likely pairs = 3, as the mock-up counts its Duplicates card."""
+    out = run(tmp_path, me("assistant"), bd=EVERY_BD, dupes=pairs_answer([PAIR_COTTON, PAIR_PRAIRIE]))
+    assert "3 Duplicates" in text(out, "ct-tidy-cards")
+    assert not shown(out, "ct-dupes"), "the notes are on the Possible duplicates filter only"
+
+
+@pytest.mark.parametrize("role", ["salesperson", "manager"])
+def test_a_salesperson_and_the_manager_never_see_the_pairs(tmp_path, role):
+    """Q21, Q36: not even from a link that names the filter, and the route is never asked."""
+    out = run(tmp_path, me(role), search="?filter=dupes", bd=EVERY_BD, dupes=pairs_answer([PAIR_COTTON], [MERGE_41]),
+              name=role)
+    assert not any(a.startswith("GET /api/bd/contacts/accounts/duplicates") for a in asked(out))
+    assert not shown(out, "ct-dupes")
+    assert all("Same account?" not in e["html"] and "Recently merged" not in e["html"] for e in out["els"].values())
+    assert len(rows(out)[0]) == 5, "no filter they may not use: every BD account shows"
+
+
+def test_the_notes_follow_merge_companies_not_the_chip(tmp_path):
+    """The Possible duplicates chip is clear_duplicate's (#810); the pairs are merge_companies' (#811).
+    Today both go to the same roles, so this can is made up: the chip, its flagged people, and no pair."""
+    who = me("assistant")
+    who["body"]["can"] = dict(who["body"]["can"], merge_companies=False)
+    out = run(tmp_path, who, search="?filter=dupes", bd=EVERY_BD, dupes=pairs_answer([PAIR_COTTON], [MERGE_41]))
+    assert not any("duplicates" in a for a in asked(out))
+    assert '<button type="button" class="chip-filter" data-chip="dupes" aria-pressed="true">' in markup(out, "ct-chips")
+    assert not shown(out, "ct-dupes")
+    assert rows(out)[0] == [(11, "bd")], "only the flagged person's account"
+    assert "1 Duplicate" in text(out, "ct-tidy-cards")
+
+
+@pytest.mark.parametrize("chip", ["mine", "confirm", "never"])
+def test_only_the_duplicates_filter_is_read_from_the_address(tmp_path, chip):
+    """?filter= is the link to the Possible duplicates view (#811) and nothing else: any other chip in
+    the address is no filter, so every BD account shows under All."""
+    out = run(tmp_path, me("assistant"), search="?filter=" + chip, bd=EVERY_BD, dupes=pairs_answer([PAIR_COTTON]))
+    assert '<button type="button" class="chip-filter" data-chip="all" aria-pressed="true">' in markup(out, "ct-chips")
+    assert len(rows(out)[0]) == len(EVERY_BD)
+
+
+def test_recently_merged_lists_each_merge_with_its_undo(tmp_path):
+    """The merges the route lists, newest first, each with an Undo naming it; the survivor of each shows
+    in the list (Cottonwood & Sons Paving, with the person moved in), the merged-away one does not."""
+    out = run(tmp_path, me("assistant"), search="?filter=dupes", bd=[BLUESTEM, COTTON_A, PRAIRIE, PRAIRIE_INC],
+              dupes=pairs_answer([PAIR_PRAIRIE], [MERGE_41, MERGE_40]))
+    html = markup(out, "ct-dupes")
+    assert "Recently merged" in text(out, "ct-dupes")
+    merged = [words_of(m) for m in re.findall(r'<li class="ct-merged-row">(.*?)</li>', html, re.S)]
+    assert merged == [
+        "Cottonwood Sons Paving Co. into Cottonwood & Sons Paving 1 person moved · Wed, Nov 4 by Casey Moret "
+        "Undo merging Cottonwood Sons Paving Co. into Cottonwood & Sons Paving",
+        "Kaw-Point Electric LLC into Kaw Point Electric, now named Kaw-Point Electric LLC 2 people moved · Tue, Nov 3 "
+        "by Emery Stoll Undo merging Kaw-Point Electric LLC into Kaw Point Electric",
+    ]
+    assert re.findall(r'data-act="unmerge" data-id="(\d+)"', html) == ["41", "40"]
+    assert rows(out)[0] == [(12, "bd"), (10, "bd"), (11, "bd")]
+
+
+def test_no_pair_and_no_merge_says_so(tmp_path):
+    out = run(tmp_path, me("admin"), search="?filter=dupes", bd=EVERY_BD, dupes=pairs_answer([]))
+    assert text(out, "ct-dupes") == "No two accounts look like the same company."
+    assert "Recently merged" not in text(out, "ct-dupes")
+
+
+def test_the_pairs_not_loading_says_why_and_the_list_still_shows(tmp_path):
+    behind = {"status": 503, "body": {"ok": False, "error": "db_behind", "message": "The <i>BD</i> database is not up to date."}}
+    out = run(tmp_path, me("assistant"), search="?filter=dupes", bd=EVERY_BD, dupes=behind)
+    assert text(out, "ct-dupes") == "The <i>BD</i> database is not up to date."
+    assert "<i>" not in markup(out, "ct-dupes")
+    assert rows(out)[0] == [(11, "bd")], "the flagged person's account still shows"
+    assert "0 Duplicates" not in text(out, "ct-tidy-cards") and "1 Duplicate" in text(out, "ct-tidy-cards")
+
+
+def test_the_pairs_are_read_page_by_page_until_the_total(tmp_path):
+    """The duplicates route pages at 500 too: the page asks again from where the last answer stopped."""
+    require_node()
+    res = responses()
+    res.pop("GET /api/bd/contacts/accounts")
+    sc = {"scripts": ["js/crm-core.js"] + page_scripts(), "token": "tok", "ready": True, "bdMe": me("admin"),
+          "now": MORNING, "ids": IDS, "responses": res, "search": "?filter=dupes", "pathname": "/bd/contacts.html",
+          "byQuery": {
+              "GET /api/bd/contacts/accounts": {
+                  "category=bd": ok({"category": "bd", "total": len(EVERY_BD), "items": EVERY_BD}),
+                  "category=maintenance": ok({"category": "maintenance", "total": 0, "items": []})},
+              "GET /api/bd/contacts/accounts/duplicates": {
+                  "offset=0": ok({"total": 2, "items": [PAIR_COTTON], "merges": [MERGE_41]}),
+                  "offset=1": ok({"total": 2, "items": [PAIR_PRAIRIE], "merges": [MERGE_41]})}}}
+    f = tmp_path / "pairs-paging.json"
+    f.write_text(json.dumps(sc), encoding="utf-8")
+    proc = run_node(HARNESS, FRONTEND, f)
+    out = last_json_line(proc.stdout)
+    assert out["threw"] is None, out["threw"]
+    assert [a for a in asked(out) if "duplicates" in a] == [
+        "GET /api/bd/contacts/accounts/duplicates?limit=500&offset=0",
+        "GET /api/bd/contacts/accounts/duplicates?limit=500&offset=1"]
+    assert len(notes(out)) == 2
+    assert re.findall(r'data-act="unmerge" data-id="(\d+)"', markup(out, "ct-dupes")) == ["41"], "one list of merges"
 
 
 # ── the move menu's words ─────────────────────────────────────────────────────────────────────────

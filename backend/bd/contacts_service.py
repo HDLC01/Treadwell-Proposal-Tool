@@ -6,6 +6,9 @@ checks, and making a contact (#808).
     cs.find_duplicates(conn, company, email, phone, except_id=None) -> [duplicate_match dicts]
     cs.resolve_company(conn, spec, extra=None) -> {"id", "name", "city", "industry"}
     cs.insert_company(conn, name, city=None, industry=None) -> the same, always a new row
+    cs.live_company(conn, normalized_name) -> the account a person with that company name joins, or None
+    cs.company_by_id(conn, id) -> the account a person given that id joins (404 when unknown)
+    cs.lock_companies(conn, ids) -> {id: row}, locked FOR UPDATE in id order (404 when one is unknown)
     cs.create_contact(conn, actor, body, source="manual") -> (Contact dict, possible_duplicates)
 
 Ported from BD's routers/contacts.py, where these lived; here because no BD router imports another
@@ -25,6 +28,7 @@ from .phone import to_e164
 
 CONTACT_NOT_FOUND = "That contact does not exist."
 COMPANY_NOT_FOUND = "That company does not exist."
+ALREADY_MERGED = "This account is already merged into another."
 FIX = "Some fields need fixing."
 
 CATEGORIES = ("bd", "maintenance")
@@ -135,13 +139,18 @@ def user_exists(conn, user_id) -> dict | None:
 # ── duplicates and companies ──────────────────────────────────────────────────────────────────
 def find_duplicates(conn, company=None, email=None, phone=None, except_id=None) -> list:
     """api.js findDuplicates: every active contact at the same normalized company, else with the
-    same email, else the same phone, in id order. Each match carries its first reason."""
+    same email, else the same phone, in id order. Each match carries its first reason.
+
+    "The same company" is every account the name stands for: those with that normalized name, and
+    the account each merged-away one was merged into, or, when no account has the name, the
+    survivor a renaming merge took it from (#811). After a merge the warning still names the people
+    at the account a person typing that name joins."""
     key = normalize_company(company) if company else ""
     mail = str(email).strip().lower() if email else ""
     tel = to_e164(phone) if phone else None
     tests = []
     if key:
-        tests.append(("co.normalized_name = %s", key, "Same company name"))
+        tests.append(("co.id = any(%s)", _accounts_named(conn, key), "Same company name"))
     if mail:
         tests.append(("c.email_lower = %s", mail, "Same email"))
     if tel:
@@ -167,14 +176,99 @@ def find_duplicates(conn, company=None, email=None, phone=None, except_id=None) 
     return [serialize.duplicate_match(r, r["reason"]) for r in rows]
 
 
+# A merged-away account (#811) is hidden, so nobody may join it: the find-or-create and an id both
+# lead to the account it was merged into, followed to the end. A chain can never loop (nothing merges
+# into a merged account), so the hop limit is only a guard.
+#
+# Every read that picks the account a person is written to takes the row FOR SHARE. A merge holds
+# both accounts FOR UPDATE until it commits, so a person being added or moved at that moment waits
+# for it, then reads the committed row, sees the mark and follows it; and a merge that starts after
+# the read waits until the person is written, then moves them with everyone else. A plain read would
+# hand back the losing account's id, and the person would land on a hidden account (review, #811).
+# The duplicate warning (find_duplicates) is only a hint, so it reads without the lock.
+#
+# A merge that gives the survivor the other account's name (`name_from`) leaves the survivor's old
+# name on no account. That name still leads to the survivor, through the merge's event, while the
+# merge stands, so Add contact and the import do not make a new duplicate of it (verifier, #811).
+# An account that really has the name always wins over that trail.
+_COMPANY_COLUMNS = "id, name, city, industry, normalized_name, merged_into"
+_MAX_HOPS = 100
+MERGED_EVENT = "company_merged"
+UNDONE_EVENT = "company_merge_undone"
+
+
+def _company_row(conn, company_id, lock=True):
+    return conn.execute("select " + _COMPANY_COLUMNS + " from companies where id = %s"
+                        + (" for share" if lock else ""), (company_id,)).fetchone()
+
+
+def _survivor(conn, row, lock=True):
+    hops = 0
+    while row is not None and row["merged_into"] is not None and hops < _MAX_HOPS:
+        row = _company_row(conn, row["merged_into"], lock)
+        hops += 1
+    return row
+
+
+def _renamed_into(conn, normalized_name: str):
+    """The survivor's id of the newest merge, not undone, that renamed its survivor away from this
+    normalized name; None when there is none."""
+    rows = conn.execute(
+        "select e.data->>'into' as into_id, e.data->>'name_before' as name_before from events e"
+        " where e.kind = %s and e.data->>'name_before' is distinct from e.data->>'name_after'"
+        " and not exists (select 1 from events x where x.kind = %s and (x.data->>'merge_id')::bigint = e.id)"
+        " order by e.id desc", (MERGED_EVENT, UNDONE_EVENT)).fetchall()
+    for r in rows:
+        if normalize_company(r["name_before"]) == normalized_name and str(r["into_id"] or "").isdigit():
+            return int(r["into_id"])
+    return None
+
+
+def _accounts_named(conn, normalized_name: str) -> list:
+    """The ids of every account a company name stands for, read without a lock (find_duplicates)."""
+    rows = conn.execute("select " + _COMPANY_COLUMNS + " from companies where normalized_name = %s",
+                        (normalized_name,)).fetchall()
+    if not rows:
+        into = _renamed_into(conn, normalized_name)
+        rows = [] if into is None else [_company_row(conn, into, lock=False)]
+    ids = {r["id"] for r in (_survivor(conn, row, lock=False) for row in rows) if r is not None}
+    return sorted(ids)
+
+
+def lock_companies(conn, ids) -> dict:
+    """Lock these companies FOR UPDATE, in id order (so two callers never wait on each other in a
+    ring), and return them by id: {id, name, normalized_name, merged_into, merged_at}. 404 when one
+    does not exist. A company move and a merge, Undo or Keep separate (#810, #811) take it first."""
+    want = sorted(set(ids))
+    rows = conn.execute("select id, name, normalized_name, merged_into, merged_at from companies"
+                        " where id = any(%s) order by id for update", (want,)).fetchall()
+    if len(rows) != len(want):
+        raise errors.not_found(COMPANY_NOT_FOUND)
+    return {r["id"]: r for r in rows}
+
+
+def live_company(conn, normalized_name: str):
+    """The oldest account with this normalized name that is not merged away; else, when only a
+    merged-away account has the name, the account its merge leads to; else, when no account has it,
+    the survivor a standing merge renamed away from it; else None.
+    {id, name, city, industry, normalized_name}."""
+    row = conn.execute("select " + _COMPANY_COLUMNS + " from companies where normalized_name = %s"
+                       " order by merged_into is not null, id limit 1 for share", (normalized_name,)).fetchone()
+    if row is None:
+        into = _renamed_into(conn, normalized_name)
+        row = None if into is None else _company_row(conn, into)
+    row = _survivor(conn, row)
+    return None if row is None else {k: row[k] for k in ("id", "name", "city", "industry", "normalized_name")}
+
+
 def company_by_id(conn, company_id):
     cid = as_int(company_id)
     if paging.as_id(cid) is None:
         raise errors.not_found(COMPANY_NOT_FOUND)
-    row = conn.execute("select id, name, city, industry from companies where id = %s", (cid,)).fetchone()
+    row = _survivor(conn, _company_row(conn, cid))
     if row is None:
         raise errors.not_found(COMPANY_NOT_FOUND)
-    return dict(row)
+    return {k: row[k] for k in ("id", "name", "city", "industry")}
 
 
 def insert_company(conn, name: str, city=None, industry=None) -> dict:
@@ -187,7 +281,8 @@ def insert_company(conn, name: str, city=None, industry=None) -> dict:
 
 def resolve_company(conn, spec, extra=None) -> dict:
     """api.js resolveCompany: {"id": n} is that company (404 when unknown); {"name": "..."} is the
-    company with the same normalized name, else a new one (city and industry from `extra`)."""
+    company with the same normalized name, else a new one (city and industry from `extra`). A
+    merged-away account is never the answer: either way leads to the account it was merged into."""
     if not isinstance(spec, dict):
         raise errors.bad_request("Pick or type a company.", {"company": "Required."})
     if spec.get("id") is not None:
@@ -199,10 +294,9 @@ def resolve_company(conn, spec, extra=None) -> dict:
     # Find-or-create under a per-name lock, so concurrent adds never make two companies with one
     # normalized name (review finding DATA-2). The lock lasts until this transaction commits.
     lock_company_name(conn, norm)
-    hit = conn.execute("select id, name, city, industry from companies where normalized_name = %s"
-                       " order by id limit 1", (norm,)).fetchone()
+    hit = live_company(conn, norm)
     if hit:
-        return dict(hit)
+        return {k: hit[k] for k in ("id", "name", "city", "industry")}
     extra = extra or {}
     city = extra.get("city") if isinstance(extra.get("city"), str) else None
     industry = extra.get("industry") if isinstance(extra.get("industry"), str) else None

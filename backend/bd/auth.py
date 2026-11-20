@@ -202,6 +202,9 @@ def can(user) -> dict:
         # Makes a whole company a maintenance account, or moves it back to BD, and undoes that move
         # (#810, Q5): the Contacts page's "..." menu item. Never the assistant.
         "move_company": a or role in ("salesperson", "manager"),
+        # Lists likely duplicate BD accounts, merges two into one, undoes a merge and keeps a pair
+        # separate (#811, Q21, Q36): the Contacts page's account pairs under Possible duplicates.
+        "merge_companies": a or role == "assistant",
     }
 
 

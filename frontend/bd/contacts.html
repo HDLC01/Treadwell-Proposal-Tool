@@ -15,7 +15,8 @@
   <!-- Contacts (#810): BD's contacts page as the approved mock-up's list of BD accounts, restyled like
        the tool. Two tabs (BD, Maintenance), each a list of companies that open to their people; a
        search; each company's "..." menu; and, as BD had them, the workbook import and To tidy's
-       unknown calls. bd-contacts.js shows each control only to the people whose can allows it. -->
+       unknown calls. #811 adds the likely duplicate BD accounts (#ct-dupes) on the Possible duplicates
+       filter. bd-contacts.js shows each control only to the people whose can allows it. -->
   <main class="page ct-page" id="main">
     <header class="page-head-row ct-head">
       <div class="page-head">
@@ -57,6 +58,7 @@
       </div>
       <div class="scroll-row ct-chips" id="ct-chips" role="group" aria-label="Filters"></div>
       <p class="ct-count" id="ct-count" hidden></p>
+      <section class="ct-dupes" id="ct-dupes" aria-label="Likely duplicate accounts" hidden></section>
       <div class="ct-list" id="ct-list" role="tabpanel" aria-labelledby="ct-tab-bd" aria-busy="true"><div class="skeleton skeleton-card"></div></div>
     </div>
   </main>

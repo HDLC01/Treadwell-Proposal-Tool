@@ -635,7 +635,7 @@ BD route serves that path with another method.
   "user": { "id": 1, "name": "Avery Quill", "email": "avery.quill@example.com", "role": "salesperson", "active": true, "last_seen_at": "2026-11-04T08:12:00-06:00" },
   "can": { "send": true, "analytics": false, "admin": false, "admin_area": false, "import": true, "run_batch": false, "week": true, "pick_owner": false,
            "add_contact": true, "edit_contact": true, "clear_duplicate": false, "cadence": true, "manage_entries": false,
-           "manage_admins": false, "move_company": true },
+           "manage_admins": false, "move_company": true, "merge_companies": false },
   "today": "2026-11-04",
   "timezone": "America/Chicago"
 }
@@ -643,13 +643,13 @@ BD route serves that path with another method.
 
 `can` per BD role:
 
-| Role | send | analytics | admin | admin_area | import | run_batch | week | pick_owner | add_contact | edit_contact | clear_duplicate | cadence | manage_entries | manage_admins | move_company |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| salesperson | yes | | | | yes | | yes | | yes | yes | | yes | | | yes |
-| assistant | | | | yes | yes | | | | yes | yes | yes | yes | | | |
-| manager | | yes | | | | | yes | yes | | | | yes | | | yes |
-| admin | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | | yes |
-| super_admin | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
+| Role | send | analytics | admin | admin_area | import | run_batch | week | pick_owner | add_contact | edit_contact | clear_duplicate | cadence | manage_entries | manage_admins | move_company | merge_companies |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| salesperson | yes | | | | yes | | yes | | yes | yes | | yes | | | yes | |
+| assistant | | | | yes | yes | | | | yes | yes | yes | yes | | | | yes |
+| manager | | yes | | | | | yes | yes | | | | yes | | | yes | |
+| admin | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | | yes | yes |
+| super_admin | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
 
 `pick_owner`: may look at any salesperson's week (`GET /api/bd/week?owner=`); This Week shows the
 "Whose week?" picker. A salesperson sees only their own week. This Week and the contact page show
@@ -691,6 +691,10 @@ talk" sort) and one more (tests/test_bd_accounts_roles.py checks it against its 
 - `move_company`: `POST /api/bd/contacts/accounts/{id}/move` and undoing your own move (Q5: salesperson,
   manager, admins; never the assistant). A company row's "..." menu offers **Make maintenance account**
   or **Move back to BD** only to this person.
+- `merge_companies`: the likely duplicate BD accounts (#811): `GET /api/bd/contacts/accounts/duplicates`,
+  Merge, Undo and Keep separate (Q21, Q36: the assistant, the BD admin, the super admin). The Possible
+  duplicates filter shows the account pairs only to this person (tests/test_bd_account_merge_roles.py
+  checks it against the merge route, person by person).
 
 #### `GET /api/bd/settings` (any BD role)
 
@@ -806,7 +810,10 @@ out unless `archived=true`. `q` is text, never a pattern. Answers `{ "ok": true,
 Add contact's "this person may already exist" check. Query: `company` and/or `email` and/or `phone`,
 and `except` (a contact id to leave out, for the contact being edited). Every contact that is not
 archived at a company with the same cleaned name, else with the same email (any case), else the same
-phone (any format), in id order, each once with the first reason that matches.
+phone (any format), in id order, each once with the first reason that matches. "The same cleaned name"
+follows merges (#811): it covers the account a merged-away account with that name went into, and the
+survivor a merge renamed away from that name, so the people at the account Add contact would join are
+named.
 
 ```json
 {
@@ -825,7 +832,10 @@ That is `?company=Cedar Creek Concrete&phone=785.555.0105`. `reason`: `Same comp
 
 Add contact. `company` is `{ "id" }` (an existing one; 404 `"That company does not exist."`) or
 `{ "name" }` (the company with the same cleaned name, else a new one with the contact's `city` and
-`industry`). The owner defaults to the caller when they are a salesperson, else the first active
+`industry`). An account merged away (#811) is never the one: its id, or a name only it has, leads to the
+account it was merged into, and a name a live account also has finds the live one. A survivor's old
+name, which a merge renamed away (`name_from`), still leads to the survivor while the merge stands, so
+neither Add contact nor the import makes a new account under it; Undo ends that. The owner defaults to the caller when they are a salesperson, else the first active
 salesperson. Text is trimmed; a client never sets `source` (always `manual`) or a derived field. A
 possible duplicate is saved anyway (**201**) with `duplicate_of` set to the first match, and the
 matches come back as `possible_duplicates`.
@@ -1040,13 +1050,125 @@ the company, a person's category or follow-ups a year changed by hand, a call it
 marked done, or a follow-up it pinned done). A call logged or a task closed at the same moment as the
 Undo is either seen (409) or waits until the Undo is done.
 
+### Likely duplicate BD accounts (#811)
+
+Two BD accounts that are one company are merged into one, or kept apart for good (#802 Q21, Q33, Q36).
+All four routes are the assistant's, the BD admin's and the super admin's (`can.merge_companies`);
+anyone else is 403. Nothing merges on its own: no background job, startup hook or read merges, only
+a person pressing Merge. The paths sit under `/api/bd/contacts/`, so the proposal tool's audit log
+records each read by its path (the hints carry phone numbers). The examples use the fixture seed.
+
+**The rule.** Two accounts are a **likely pair** when their **cleaned names** are equal. Cleaning lowers
+the case, drops punctuation (and `&` or `and` between words), spells out short forms (`Const.` is
+Construction, `Mfg.` Manufacturing, `Bros.` Brothers, `Mech` Mechanical, and the like), drops company
+endings at the end (LLC, Inc, Co, Corp, Ltd, Company, Corporation, LLP, PC and the like; never the last
+word) and joins the words, so `Kaw-Point` and `Kaw Point` are one name. A name with nothing left never
+pairs. A shared phone, or a shared email domain that is not a free mail domain (gmail.com, yahoo.com,
+outlook.com, comcast.net and the others the code lists), among the people at the two accounts who are
+not archived, is a **hint** shown with the pair; a hint alone never makes a pair. A pair is listed only
+when at least one of the two has a BD person who is not archived (they are likely duplicate BD
+accounts, and the BD tab shows that one): two maintenance-only accounts, or two with nobody, are never
+listed. An account merged away, and a pair kept separate, is never listed.
+
+#### `GET /api/bd/contacts/accounts/duplicates` (assistant)
+
+Query: `limit`, `offset`. `{ "ok": true, "total": N, "items": [Pair], "merges": [Merge] }`. A pair's `a` is
+the account with the lower id; pairs come in cleaned-name order, then by id. `people_count` counts the
+people who are not archived, BD and maintenance alike (all of them move in a merge). `merges` is the
+"Recently merged" list: the latest 10 merges Undo may still take, newest first: not undone, and the
+survivor not merged on since (Undo would refuse that one). A Merge here has the same shape as the
+merge route's answer; `people_count` is the survivor's people now.
+
+```json
+{
+  "ok": true,
+  "total": 2,
+  "items": [
+    { "a": { "id": 12, "name": "Cottonwood & Sons Paving", "city": "Olathe", "people_count": 1 },
+      "b": { "id": 13, "name": "Cottonwood Sons Paving Co.", "city": "Olathe", "people_count": 1 },
+      "hints": { "phones": [], "email_domains": ["cottonwoodpaving.example.com"] } },
+    { "a": { "id": 10, "name": "Prairie Ridge Builders LLC", "city": "Overland Park", "people_count": 1 },
+      "b": { "id": 11, "name": "Prairie Ridge Builders, Inc.", "city": "Overland Park", "people_count": 2 },
+      "hints": { "phones": [], "email_domains": ["prairieridge.example.com"] } }
+  ],
+  "merges": []
+}
+```
+
+That is the fixture seed. Cedar Creek Concrete and Cedar Crest Concrete share a phone and an email domain
+but not a cleaned name, so they are not a pair. A merge in `merges`:
+
+```json
+{ "id": 41, "account": { "id": 12, "name": "Cottonwood & Sons Paving" }, "into": { "id": 13, "name": "Cottonwood Sons Paving Co." }, "name_before": "Cottonwood Sons Paving Co.", "people": 1, "people_count": 2, "at": "2026-11-04T10:30:00-06:00", "by": { "id": 3, "name": "Casey Moret" } }
+```
+
+#### `POST /api/bd/contacts/accounts/{id}/merge` (assistant)
+
+`{id}` is the account merged away. Body `{ "into": the surviving account's id, "name_from": the id of the
+account whose name the survivor keeps }`: which account survives and which name it keeps are two
+choices, both sent (`name_from` is `{id}` or `into`). Refused, changing nothing: 400 `fields.into`
+`"Pick the account to merge into."` (missing, or not a whole number; `11.0` is read as `11`, as Add
+contact reads a company id) or `"Pick another account."` (itself);
+400 `fields.name_from` `"Pick one of the two names."`; 404 `"That company does not exist."` (either
+account); 409 `"This account is already merged into another."`; 409 `"That account was merged into
+another, so nothing can merge into it."`. Any two accounts may be merged, listed as a pair or not.
+
+In one transaction, with both accounts locked first (Add contact, a contact's company change and the
+import read an account with a lock that waits for a merge in flight, then follow it, so a person added
+at that moment never lands on the hidden account): **every person** at `{id}` moves to `into` (BD
+and maintenance, archived too, so nobody is left on a hidden account), each **keeping their own
+owner** (Q33); their history, tasks and recommendations point at the person, so they follow. The
+survivor takes the picked name. `{id}` is not deleted: it is marked merged into the survivor, with who
+and when, and the account list, search and the type-ahead never show it again. Add contact and the
+import never put a person on it: its name or id leads to the account it was merged into, and nobody
+can edit it (`PATCH /api/bd/companies/{id}` is 409). When the survivor takes `{id}`'s name, its old
+name still leads to it (Add contact above). One event,
+`company_merged`, by the caller, with no contact: `{ "company_id", "into", "name_from", "name_before",
+"name_after", "contacts": [ids moved], "people" }`. Ids and account names only, never a person's name,
+phone or email.
+
+```json
+{ "into": 11, "name_from": 10 }
+```
+
+```json
+{ "ok": true, "merge": { "id": 41, "account": { "id": 10, "name": "Prairie Ridge Builders LLC" }, "into": { "id": 11, "name": "Prairie Ridge Builders LLC" }, "name_before": "Prairie Ridge Builders, Inc.", "people": 1, "people_count": 3, "at": "2026-11-04T10:30:00-06:00", "by": { "id": 3, "name": "Casey Moret" } } }
+```
+
+`people` counts the people moved who are not archived; `people_count` the survivor's people now ("Merged.
+Prairie Ridge Builders LLC now has 3 people.").
+
+#### `POST /api/bd/contacts/accounts/merges/{id}/undo` (assistant)
+
+`{id}` is the merge's `id`. Every merge can be undone, with no time limit, by anyone who may merge. It
+moves back exactly the people that merge moved, restores the survivor's name if the merge changed it,
+and clears the mark; anyone added to the survivor since stays there. `{ "ok": true, "undone": { "id",
+"account": { "id", "name" }, "into": { "id", "name" }, "people" } }`, and one `company_merge_undone` event
+`{ "merge_id", "company_id", "into", "people" }`. Refused, changing nothing: 404 `"That merge does not
+exist."`; 409 `"This merge is already undone."` (a second press, and so too once the account was merged
+again after an undo); 409 `"Something changed since this merge, so it can't be undone."` (a person it
+moved is no longer at the survivor, because they moved company or the survivor was merged on with them;
+the survivor was renamed after the merge renamed it; or the account's mark is no longer this merge's).
+
+#### `POST /api/bd/contacts/accounts/duplicates/keep` (assistant)
+
+Keep separate. Body `{ "accounts": [id, id] }`, two different accounts (else 400 `fields.accounts`
+`"Pick two different accounts."`; an unknown one is 404 `"That company does not exist."`; one merged
+away is 409 `"This account is already merged into another."`). The pair is recorded once, lower id
+first, and never listed again. Pressing it again changes nothing and answers the first decision.
+
+```json
+{ "ok": true, "kept": { "a": { "id": 10, "name": "Prairie Ridge Builders LLC" }, "b": { "id": 11, "name": "Prairie Ridge Builders, Inc." }, "decided_by": { "id": 3, "name": "Casey Moret" }, "decided_at": "2026-11-04T10:30:00-06:00" } }
+```
+
 ### Companies (#808)
 
 #### `GET /api/bd/companies` (any BD role)
 
 Add contact's company type-ahead. Query: `q`, `limit`, `offset`. A company matches when its cleaned
 name starts with the cleaned `q`, or one of its later words does (`ridge` finds Prairie Ridge, `idge`
-finds nothing; a `q` that cleans to nothing lists every company). Ordered by name, any case.
+finds nothing; a `q` that cleans to nothing lists every company). Ordered by name, any case. An account
+merged away (#811) is never listed; every other company answers as it did.
 `contact_count` counts the people who are not archived.
 
 ```json
@@ -1074,7 +1196,9 @@ Add contact (400 `"Keep this to 200 characters or fewer."`).
 
 Any of `name` (blank is 400 `"A company needs a name."`), `city`, `industry` (text or `null`). A
 rename moves the cleaned name with it, so the duplicate check and Add contact find the new name.
-The same 200-character limits as `POST`. `{ "ok": true, "company": Company }`.
+The same 200-character limits as `POST`. `{ "ok": true, "company": Company }`. An account merged away
+(#811) is refused, changing nothing: 409 `"This account is already merged into another."`; it stays as
+it was until Undo brings it back.
 
 ### Admin (#809)
 

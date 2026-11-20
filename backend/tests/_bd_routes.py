@@ -98,6 +98,11 @@ ROUTE_ROLES = {
     ("GET", "/api/bd/contacts/search"): ANY,
     ("POST", "/api/bd/contacts/accounts/{id}/move"): _open("salesperson", "manager"),
     ("POST", "/api/bd/contacts/accounts/moves/{id}/undo"): _open("salesperson", "manager"),  # your own move only
+    # Likely duplicate BD accounts: the list, Merge, Undo, Keep separate (#811)
+    ("GET", "/api/bd/contacts/accounts/duplicates"): _open("assistant"),
+    ("POST", "/api/bd/contacts/accounts/{id}/merge"): _open("assistant"),
+    ("POST", "/api/bd/contacts/accounts/merges/{id}/undo"): _open("assistant"),
+    ("POST", "/api/bd/contacts/accounts/duplicates/keep"): _open("assistant"),
     # Companies
     ("GET", "/api/bd/companies"): ANY,
     ("GET", "/api/bd/companies/{id}"): ANY,

@@ -610,8 +610,14 @@ class _Importer:
         self.default_owner = sales[0] if sales else None
 
         self.companies: dict[str, dict] = {}
-        for co in conn.execute("select id, name, normalized_name from companies order by id").fetchall():
+        # Only accounts that are not merged away (#811): a name that only a merged one has is looked
+        # up in company_for, which leads to the account it was merged into.
+        for co in conn.execute("select id, name, normalized_name from companies where merged_into is null"
+                               " order by id").fetchall():
             self.companies.setdefault(co["normalized_name"], co)
+        # The ids company_for has read again FOR SHARE in this run: a merge of one cannot commit until
+        # the run does, so the remembered row stays right for the rest of the run.
+        self.held: set = set()
 
         # (company_norm, email) or (company_norm, None, name) -> contact
         self.by_key: dict[tuple, dict] = {}
@@ -670,18 +676,25 @@ class _Importer:
 
     def company_for(self, r: Row, norm: str):
         co = self.companies.get(norm)
+        if co is not None and co["id"] not in self.held:
+            # Remembered when the run started: a merge may have committed since, or be committing now
+            # (the locked read waits for it). Either way the person goes where the merge went (#811).
+            co = cs.company_by_id(self.conn, co["id"])
+            self.companies[norm] = co
         if co is None:
             # The lock the app's find-or-create takes too (review DATA-2), then a fresh look: a
             # person added in the app since this run started may have made the company already.
             lock_company_name(self.conn, norm)
-            co = self.conn.execute("select id, name, normalized_name from companies where normalized_name = %s"
-                                   " order by id limit 1", (norm,)).fetchone()
+            co = cs.live_company(self.conn, norm)
+            if co is not None:
+                self.companies[norm] = co
         if co is None:
             # The one company insert the app's Add uses too (bd/contacts_service.py), so a change to
             # the companies columns is made in one place. It normalizes r.company to `norm` itself.
             co = cs.insert_company(self.conn, r.company, r.city,
                                    _canon(r.industry, self.settings.get("industries")))
             self.companies[norm] = co
+        self.held.add(co["id"])
         return co
 
     def duplicate_of(self, norm, email, e164):

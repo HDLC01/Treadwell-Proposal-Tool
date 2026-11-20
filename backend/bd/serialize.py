@@ -275,6 +275,35 @@ def account_move(move_id: Any, company_row: Row, to: str, people: int, calls_off
     }
 
 
+def account_pair(a: Row, b: Row, phones: Any, email_domains: Any) -> dict:
+    """A likely duplicate pair of BD accounts (#811): both sides, lower id first, each with its people
+    who are not archived, and what they share (a hint only, never the reason for the pair)."""
+    def side(r: Row) -> dict:
+        return {"id": r["id"], "name": r["name"], "city": r["city"], "people_count": int(r["people_count"])}
+    return {"a": side(a), "b": side(b),
+            "hints": {"phones": sorted(phones), "email_domains": sorted(email_domains)}}
+
+
+def account_merge(merge_id: Any, account: dict, into: dict, name_before: Any, people: Any,
+                  people_count: Any, at: Any, by: Any) -> dict:
+    """One merge (#811), as POST .../merge answers it and as Recently merged lists it: its id (for
+    Undo), the account merged away and the survivor (CompanyRefs; the survivor by its name now), the
+    survivor's name before, how many people moved and how many the survivor holds now (neither counts
+    the archived), when, and by whom."""
+    return {"id": merge_id, "account": account, "into": into, "name_before": name_before,
+            "people": None if people is None else int(people), "people_count": int(people_count),
+            "at": ts(at), "by": by}
+
+
+def merge_undone(merge_id: Any, account: dict, into: dict, people: Any) -> dict:
+    return {"id": merge_id, "account": account, "into": into, "people": people}
+
+
+def kept_pair(a: dict, b: dict, decided_by: Any, decided_at: Any) -> dict:
+    """A pair kept as two accounts (#811): both CompanyRefs, lower id first, who decided and when."""
+    return {"a": a, "b": b, "decided_by": decided_by, "decided_at": ts(decided_at)}
+
+
 # ── interactions ─────────────────────────────────────────────────────────────────────────────
 INTERACTION_SELECT = (
     "select i.id, i.contact_id, c.name as contact_name, c.company_id, co.name as company_name,"

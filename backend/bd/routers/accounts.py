@@ -9,7 +9,9 @@ Maintenance tabs (#810).
 A "BD account" is a companies row (the table keeps its name, Q19). Its people are its contacts that are
 not archived; a person is on the BD tab or the Maintenance tab by their own `category` column, so an
 account is on a tab when at least one of its people is (an account holding only maintenance people is
-not on the BD tab, Q35). Nothing here changes the shape of the data.
+not on the BD tab, Q35). Nothing here changes the shape of the data. An account merged into another
+(#811, bd/routers/account_merge.py) drops off both tabs and search with no test of its own here: a
+merge moves every person off it, and an account with no people is on neither tab.
 
 The paths sit under /api/bd/contacts/ on purpose: the tool's audit log records every read of a path
 holding "/contacts" (main._AUDIT_SENSITIVE), and these answer people's phones and emails. They never
@@ -68,7 +70,7 @@ from typing import Any
 from fastapi import Body, Depends, Path, Request
 
 from .. import appsettings, auth, bizdate, db, errors, paging, serialize, web, weekly
-from ..contacts_service import COMPANY_NOT_FOUND, FIX, default_frequency, too_long
+from ..contacts_service import COMPANY_NOT_FOUND, FIX, default_frequency, lock_companies, too_long
 from ..events import log_event
 from ..normalize import normalize_company
 from ..phone import digits as phone_digits
@@ -232,10 +234,7 @@ def search(request: Request, user: dict = Depends(auth.current_user)):
 
 # ── moving a company ─────────────────────────────────────────────────────────────────────────
 def _lock_company(conn, company_id) -> dict:
-    row = conn.execute("select id, name from companies where id = %s for update", (company_id,)).fetchone()
-    if row is None:
-        raise errors.not_found(COMPANY_NOT_FOUND)
-    return row
+    return lock_companies(conn, [company_id])[company_id]
 
 
 def _take_off(conn, contact_ids: list, kinds: tuple, today) -> list:
