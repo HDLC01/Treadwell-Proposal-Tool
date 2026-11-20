@@ -148,7 +148,8 @@ On Hanz's go:
    mark and kept pair as it was, and prints how many. A merged-away account that gained people in the
    old app during the rollback gets no mark back (marking it would hide them), and neither does one
    the old app deleted. Each is listed by account id and name for Hanz, with any kept pair whose
-   account is gone. Hanz decides whether to merge them again.
+   account is gone. Hanz decides whether to merge them again. Their old merges drop off the Contacts
+   page's Recently merged list, since there is no mark left for Undo to take back.
 
 ## What each refusal means
 

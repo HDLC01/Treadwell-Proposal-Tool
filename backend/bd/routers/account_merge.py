@@ -80,7 +80,9 @@ def _people(conn, company_id) -> int:
 
 # ── the list (the rule itself: bd/account_pairs_service.py) ─────────────────────────────────────
 def _recent_merges(conn) -> list:
-    """The latest merges Undo may still take: not undone, and the survivor not merged on since."""
+    """The latest merges Undo may still take: not undone, the account still marked merged into the
+    survivor (a cut-over copy puts no mark back on an account that gained people in the old app,
+    #812), and the survivor not merged on since."""
     rows = conn.execute(
         "select e.id, e.at, e.data, u.id as by_id, u.name as by_name, lo.name as account_name, su.name as into_name,"
         " (select count(*) from contacts c where c.company_id = su.id and c.archived_at is null)::integer"
@@ -88,8 +90,8 @@ def _recent_merges(conn) -> list:
         " from events e left join users u on u.id = e.actor_id"
         " join companies lo on lo.id = (e.data->>'company_id')::bigint"
         " join companies su on su.id = (e.data->>'into')::bigint"
-        " where e.kind = %s and su.merged_into is null and not exists (select 1 from events x where x.kind = %s"
-        "   and (x.data->>'merge_id')::bigint = e.id)"
+        " where e.kind = %s and lo.merged_into = su.id and su.merged_into is null"
+        " and not exists (select 1 from events x where x.kind = %s and (x.data->>'merge_id')::bigint = e.id)"
         " order by e.id desc limit %s", (MERGED, UNDONE, MERGES_SHOWN)).fetchall()
     return [serialize.account_merge(
         r["id"], serialize.company_ref(r["data"]["company_id"], r["account_name"]),

@@ -282,6 +282,27 @@ def test_a_merged_away_account_that_gained_people_gets_no_mark_back_and_is_liste
     assert "bd_carry re-applied: 1 merge mark, 2 kept pairs." in out
 
 
+def test_recently_merged_no_longer_offers_undo_for_a_merge_whose_mark_was_not_put_back(dbs, api):
+    """40 gained a person in the old app, so its mark is not put back: its merge (still in the
+    copied ledger) must leave Recently merged, whose Undo could only answer 409. 46's mark is put
+    back, so its merge stays listed; Harrow's was undone in the tool and stays off the list. Merged
+    anew into 43, 40 lists only the new merge: the old one's mark (into 41) is gone."""
+    assert forward(dbs, dbs.record) == EXIT_OK
+    merges = tool_changes(api)
+    shown = ok(api(TAMSIN).get("/api/bd/contacts/accounts/duplicates"))["merges"]
+    assert [(m["id"], m["account"]["id"]) for m in shown] == [(merges["quarry"], 46), (merges["juniper"], 40)]
+    assert reverse(dbs) == EXIT_OK
+    with _bd_db.connect(dbs.old) as conn:
+        conn.execute("insert into public.contacts (company_id, name, category) values (40, 'Rosalind Ketteridge', 'bd')")
+    empty_schema_bd(dbs.tool)
+    assert forward(dbs, dbs.record2) == EXIT_OK
+    shown = ok(api(TAMSIN).get("/api/bd/contacts/accounts/duplicates"))["merges"]
+    assert [(m["id"], m["account"]["id"]) for m in shown] == [(merges["quarry"], 46)]
+    again = merge(api, 40, 43, 43)                     # 40 merged anew, into another survivor
+    shown = ok(api(TAMSIN).get("/api/bd/contacts/accounts/duplicates"))["merges"]
+    assert [(m["id"], m["account"]["id"]) for m in shown] == [(again, 40), (merges["quarry"], 46)]
+
+
 def test_a_merged_away_account_the_old_app_deleted_is_listed_with_its_kept_pair(dbs, api, capsys):
     assert forward(dbs, dbs.record) == EXIT_OK
     tool_changes(api)
