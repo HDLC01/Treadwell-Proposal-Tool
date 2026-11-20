@@ -9,6 +9,16 @@ made spaces, lower case, "&" and punctuation dropped, spaces collapsed, and trai
 Inc/LLC/Co/Corp/... removed (never the last word). The company NAME itself is stored trimmed with
 clean_name, never in this form. Every router that inserts or renames a company must set
 `normalized_name = normalize_company(name)` (the column is NOT NULL so a forgotten one fails).
+
+account_key is the likely-duplicate BD accounts rule (#811, #802 Q21): two accounts whose keys are
+equal are a likely pair. It goes further than normalize_company, which Add contact's find-or-create
+keeps using unchanged: short forms are spelled out ("Const." is "Construction"), "and" between words
+goes as "&" does, more endings go, and the spaces go, so "Kaw-Point" and "Kaw Point" are one name.
+email_domain and FREE_MAIL_DOMAINS give the pair's email-domain hint (a free mail domain is never one).
+
+    account_key("Tallgrass Const. LLC")          -> "tallgrassconstruction"
+    account_key("Smith and Sons Roofing Corp")   -> "smithsonsroofing"
+    email_domain(" Rae@BisonFlooring.Example.com ") -> "bisonflooring.example.com"
 """
 from __future__ import annotations
 
@@ -57,3 +67,45 @@ def email_key(email: Any) -> str | None:
     """Lower-case, trimmed email, or None for nothing (`contacts.email_lower`)."""
     s = ("" if email is None else str(email)).strip().lower()
     return s or None
+
+
+# ── likely duplicate BD accounts (#811) ──────────────────────────────────────────────────────────
+# Endings dropped from the end of a name, beyond COMPANY_SUFFIXES ("and the like", the ticket).
+ACCOUNT_ENDINGS = COMPANY_SUFFIXES + ("limited", "llp", "lp", "pc", "plc")
+
+# Short forms spelled out, word by word, after the punctuation is gone ("Const." is "const").
+SHORT_FORMS = {
+    "const": "construction", "constr": "construction", "cnst": "construction",
+    "bros": "brothers", "mfg": "manufacturing", "mech": "mechanical", "elec": "electric",
+    "engr": "engineering", "eng": "engineering", "intl": "international", "natl": "national",
+    "mgmt": "management", "mgt": "management", "svcs": "services", "dev": "development",
+    "dist": "distribution", "assoc": "associates", "assn": "association", "contr": "contractors",
+    "contrs": "contractors", "bldrs": "builders", "bldg": "building", "grp": "group", "inds": "industries",
+    "hldgs": "holdings", "props": "properties", "sys": "systems", "ctr": "center",
+}
+
+# Free mail domains: a shared one says nothing about a company, so it is never a hint. Fixed here, on
+# purpose: the big free providers and the internet providers people in Kansas and Missouri use.
+FREE_MAIL_DOMAINS = frozenset({
+    "gmail.com", "googlemail.com", "yahoo.com", "ymail.com", "rocketmail.com", "hotmail.com", "outlook.com",
+    "live.com", "msn.com", "aol.com", "icloud.com", "me.com", "mac.com", "protonmail.com", "proton.me",
+    "gmx.com", "mail.com", "zoho.com", "yandex.com", "fastmail.com", "hey.com",
+    "comcast.net", "att.net", "sbcglobal.net", "swbell.net", "bellsouth.net", "verizon.net", "cox.net",
+    "charter.net", "spectrum.net", "kc.rr.com", "everestkc.net", "embarqmail.com", "centurylink.net",
+    "q.com", "windstream.net", "earthlink.net", "juno.com", "netzero.net", "frontier.com", "suddenlink.net",
+})
+
+
+def account_key(name: Any) -> str:
+    """The cleaned name two BD accounts must share to be a likely pair; "" never pairs."""
+    words = [SHORT_FORMS.get(w, w) for w in normalize_company(name).split(" ") if w and w != "and"]
+    while len(words) > 1 and words[-1] in ACCOUNT_ENDINGS:
+        words.pop()
+    return "".join(words)
+
+
+def email_domain(email: Any) -> str | None:
+    """The part after the last "@" of a trimmed, lower-case email, or None."""
+    s = email_key(email) or ""
+    at = s.rfind("@")
+    return s[at + 1:] if 0 < at < len(s) - 1 else None

@@ -6,6 +6,7 @@ checks, and making a contact (#808).
     cs.find_duplicates(conn, company, email, phone, except_id=None) -> [duplicate_match dicts]
     cs.resolve_company(conn, spec, extra=None) -> {"id", "name", "city", "industry"}
     cs.insert_company(conn, name, city=None, industry=None) -> the same, always a new row
+    cs.live_company(conn, normalized_name) -> the account a person with that company name joins, or None
     cs.create_contact(conn, actor, body, source="manual") -> (Contact dict, possible_duplicates)
 
 Ported from BD's routers/contacts.py, where these lived; here because no BD router imports another
@@ -167,14 +168,41 @@ def find_duplicates(conn, company=None, email=None, phone=None, except_id=None) 
     return [serialize.duplicate_match(r, r["reason"]) for r in rows]
 
 
+# A merged-away account (#811) is hidden, so nobody may join it: the find-or-create and an id both
+# lead to the account it was merged into, followed to the end. A chain can never loop (nothing merges
+# into a merged account), so the hop limit is only a guard.
+_COMPANY_COLUMNS = "id, name, city, industry, normalized_name, merged_into"
+_MAX_HOPS = 100
+
+
+def _survivor(conn, row):
+    hops = 0
+    while row is not None and row["merged_into"] is not None and hops < _MAX_HOPS:
+        row = conn.execute("select " + _COMPANY_COLUMNS + " from companies where id = %s",
+                           (row["merged_into"],)).fetchone()
+        hops += 1
+    return row
+
+
+def live_company(conn, normalized_name: str):
+    """The oldest account with this normalized name that is not merged away; else, when only a
+    merged-away account has the name, the account its merge leads to; else None.
+    {id, name, city, industry, normalized_name}."""
+    row = conn.execute("select " + _COMPANY_COLUMNS + " from companies where normalized_name = %s"
+                       " order by merged_into is not null, id limit 1", (normalized_name,)).fetchone()
+    row = _survivor(conn, row)
+    return None if row is None else {k: row[k] for k in ("id", "name", "city", "industry", "normalized_name")}
+
+
 def company_by_id(conn, company_id):
     cid = as_int(company_id)
     if paging.as_id(cid) is None:
         raise errors.not_found(COMPANY_NOT_FOUND)
-    row = conn.execute("select id, name, city, industry from companies where id = %s", (cid,)).fetchone()
+    row = _survivor(conn, conn.execute("select " + _COMPANY_COLUMNS + " from companies where id = %s",
+                                       (cid,)).fetchone())
     if row is None:
         raise errors.not_found(COMPANY_NOT_FOUND)
-    return dict(row)
+    return {k: row[k] for k in ("id", "name", "city", "industry")}
 
 
 def insert_company(conn, name: str, city=None, industry=None) -> dict:
@@ -187,7 +215,8 @@ def insert_company(conn, name: str, city=None, industry=None) -> dict:
 
 def resolve_company(conn, spec, extra=None) -> dict:
     """api.js resolveCompany: {"id": n} is that company (404 when unknown); {"name": "..."} is the
-    company with the same normalized name, else a new one (city and industry from `extra`)."""
+    company with the same normalized name, else a new one (city and industry from `extra`). A
+    merged-away account is never the answer: either way leads to the account it was merged into."""
     if not isinstance(spec, dict):
         raise errors.bad_request("Pick or type a company.", {"company": "Required."})
     if spec.get("id") is not None:
@@ -199,10 +228,9 @@ def resolve_company(conn, spec, extra=None) -> dict:
     # Find-or-create under a per-name lock, so concurrent adds never make two companies with one
     # normalized name (review finding DATA-2). The lock lasts until this transaction commits.
     lock_company_name(conn, norm)
-    hit = conn.execute("select id, name, city, industry from companies where normalized_name = %s"
-                       " order by id limit 1", (norm,)).fetchone()
+    hit = live_company(conn, norm)
     if hit:
-        return dict(hit)
+        return {k: hit[k] for k in ("id", "name", "city", "industry")}
     extra = extra or {}
     city = extra.get("city") if isinstance(extra.get("city"), str) else None
     industry = extra.get("industry") if isinstance(extra.get("industry"), str) else None

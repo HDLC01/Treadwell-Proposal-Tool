@@ -286,7 +286,7 @@ GATE_CASES = [(m, p, role) for (m, p) in ROUTE_KEYS for role in ROLES]
 ALWAYS_200 = {("GET", p) for p in (
     "/api/bd/me", "/api/bd/settings", "/api/bd/users", "/api/bd/week", "/api/bd/contacts",
     "/api/bd/contacts/duplicates", "/api/bd/contacts/{id}", "/api/bd/contacts/{id}/interactions",
-    "/api/bd/contacts/accounts",
+    "/api/bd/contacts/accounts", "/api/bd/contacts/accounts/duplicates",
     "/api/bd/companies", "/api/bd/companies/{id}", "/api/bd/admin/users", "/api/bd/admin/telephony",
     "/api/bd/admin/unmatched-calls", "/api/bd/admin/imports")}
 

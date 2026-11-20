@@ -20,5 +20,7 @@ Conventions every router follows (see bd/auth.py, bd/errors.py, bd/serialize.py,
   * time:    bizdate.today_central() / now_central(); in SQL bd_today() / bd_now().
 """
 # accounts comes before contacts: its paths (/api/bd/contacts/accounts, /api/bd/contacts/search) must win
-# over GET /api/bd/contacts/{id}, which would read "accounts" as a contact id.
-ROUTER_MODULES = ("meta", "week", "interactions", "accounts", "contacts", "companies", "admin", "imports")
+# over GET /api/bd/contacts/{id}, which would read "accounts" as a contact id. account_merge (#811, the
+# likely duplicate accounts under /api/bd/contacts/accounts/) sits beside it, before contacts too.
+ROUTER_MODULES = ("meta", "week", "interactions", "accounts", "account_merge", "contacts", "companies", "admin",
+                  "imports")

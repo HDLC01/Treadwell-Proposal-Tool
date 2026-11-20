@@ -217,6 +217,14 @@ _Avoid_: Last contact, last touch, last activity
 A BD contact who may be the same person as one already in the BD CRM, because they share a company name (once cleaned of endings such as LLC), an email or a phone number. Add contact warns about them before saving; the new contact is saved anyway, flagged with the first match, and an assistant or BD admin clears the flag.
 _Avoid_: Duplicate contact, likely duplicate (that is two BD accounts that may be one company)
 
+**Likely duplicate accounts**:
+Two BD accounts whose names are the same once cleaned of endings such as LLC, of punctuation and of short forms such as "Const.", so they may be one company. An assistant or BD admin merges them into one, or keeps them separate for good. A phone or email domain they share is shown as a hint, but never makes a pair on its own.
+_Avoid_: Possible duplicate (that is one person), duplicate company
+
+**Merged account**:
+A BD account whose people were all moved into another BD account by a merge, each keeping their owner. It is kept, marked with who merged it and when, and hidden from the Contacts page, its search and Add contact. Every merge can be undone. The code and its event log call this a company merge (company_merged, merge_companies), the database table's word.
+_Avoid_: Deleted account, duplicate account
+
 **Logged entry**:
 A call, voicemail, meeting, hosted event, email, text or note in a BD contact's history. The person who logged it can change its words; a BD admin can change or delete any.
 _Avoid_: Activity, interaction (the API's word for it), log

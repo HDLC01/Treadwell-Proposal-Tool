@@ -48,16 +48,17 @@ def _name_field(name: str, fields: dict) -> None:
 @router.get("/api/bd/companies")
 def list_companies(request: Request, user: dict = Depends(auth.current_user)):
     """Type-ahead: a company matches when its normalized name starts with the normalized `q`,
-    or one of its later words does (api.js listCompanies)."""
+    or one of its later words does (api.js listCompanies). A merged-away account is never listed
+    (#811); every other answer is as it was."""
     q = request.query_params
     fields: dict = {}
     limit, offset = paging.page_params(q, fields)
     if fields:
         raise errors.bad_request(FIX, fields)
     needle = normalize_company(q.get("q")) if q.get("q") else ""
-    where, params = "true", []
+    where, params = "co.merged_into is null", []
     if needle:
-        where = "(starts_with(co.normalized_name, %s) or strpos(co.normalized_name, %s) > 0)"
+        where += " and (starts_with(co.normalized_name, %s) or strpos(co.normalized_name, %s) > 0)"
         params = [needle, " " + needle]
     with db.connect() as conn:
         total = conn.execute("select count(*) as n from companies co where " + where, params).fetchone()["n"]
