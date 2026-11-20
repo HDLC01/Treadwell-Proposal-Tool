@@ -41,7 +41,7 @@ MAINTENANCE_ONLY_ACCOUNT = 17
 # bd.schema_migrations is never touched.
 APP_TABLES = ("events", "tasks", "task_batches", "followup_drafts", "ai_recommendations",
               "integration_events", "unmatched_calls", "candidates", "interactions", "contacts",
-              "companies", "imports", "settings", "users")
+              "account_pairs_kept", "companies", "imports", "settings", "users")
 IDENTITY_TABLES = ("users", "companies", "contacts", "interactions", "task_batches", "tasks",
                    "ai_recommendations", "followup_drafts", "candidates", "unmatched_calls",
                    "events", "imports")

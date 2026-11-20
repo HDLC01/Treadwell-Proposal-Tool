@@ -24,7 +24,8 @@ BACKEND = pathlib.Path(__file__).resolve().parents[1]
 
 EXPECTED_TABLES = {"users", "companies", "contacts", "interactions", "task_batches", "tasks",
                    "ai_recommendations", "followup_drafts", "candidates", "integration_events",
-                   "unmatched_calls", "settings", "events", "imports", "schema_migrations"}
+                   "unmatched_calls", "settings", "events", "imports", "schema_migrations",
+                   "account_pairs_kept"}
 EXPECTED_FUNCTIONS = {"bd_today", "bd_now", "bd_date", "bd_e164", "bd_cadence_frequency",
                       "contacts_default_frequency"}
 
