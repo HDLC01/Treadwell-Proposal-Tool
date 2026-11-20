@@ -5,7 +5,9 @@ placeholder and over the 404.
 Each module exposes `router = web.make_router()` (BD's route class: the envelope and no-store) and
 declares FULL paths ("/api/bd/contacts/{id}"): no prefix, so a route reads exactly as
 docs/bd/api-contract.md writes it with /api/bd in front. A new module is added here (and only here);
-nobody needs to touch bd/api.py or main.py.
+nobody needs to touch bd/api.py or main.py. A new ROUTE gets its heading in docs/bd/api-contract.md
+and its line in tests/_bd_routes.py (who may call it): tests/test_bd_authz_matrix.py fails until both
+are written.
 
 Conventions every router follows (see bd/auth.py, bd/errors.py, bd/serialize.py, bd/db.py):
   * routes are plain `def`, never `async def` (bd/db.py says why).

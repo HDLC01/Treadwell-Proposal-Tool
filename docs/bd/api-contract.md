@@ -1,10 +1,13 @@
 # BD CRM API contract
 
-> Moved here from the BD CRM repo for the move into the proposal tool (#802, #805). This copy keeps
-> the ground rules and the **core objects** that `backend/bd/serialize.py` builds and
-> `backend/tests/test_bd_serialize.py` checks against the JSON examples below. BD's route list is
-> not carried: each ticket of #802 adds the routes it moves, under `/api/bd/`. Every person and
-> email in it is fictional.
+> Moved here from the BD CRM repo for the move into the proposal tool (#802). #805 brought the ground
+> rules and the **core objects** that `backend/bd/serialize.py` builds and
+> `backend/tests/test_bd_serialize.py` checks against the JSON examples below; #806 to #809 moved
+> BD's routes under `/api/bd/`. Since #809 this lists **every** BD route, the unbuilt ones too:
+> `backend/tests/test_bd_contract_routes.py` checks each one is registered and nothing else is,
+> `backend/tests/test_bd_contract_json.py` that the BD pages call only these, and
+> `backend/tests/test_bd_authz_matrix.py` that each route lets in exactly the BD roles its heading
+> names.
 
 The BD pages and the backend agree on **these shapes**. A change to this file is a change to both
 sides.
@@ -599,7 +602,16 @@ A call or text whose number matched no contact, as the unmatched-calls list retu
 
 ## Routes
 
-Each ticket of #802 moves its BD routes under `/api/bd/` and documents them here.
+Every BD route, one heading each, in the one form the tests read:
+
+    #### `METHOD /api/bd/path` (who)
+
+`who` names the BD roles the route lets in (`any BD role`, or roles such as `salesperson, assistant`;
+BD admins and super admins pass every role check), `whoever logged it` for the one route an entry's
+author owns, or `public` for the telephony webhook. Words after a `;` qualify the door ("an assistant
+logs notes only") and may let a role in for part of the route ("a manager the cadence only"). A route
+that answers 503 says `not built yet`. A new BD route gets its heading here and its line in
+`backend/tests/_bd_routes.py` in the same change.
 
 Every route below answers 503 `"The BD CRM is not turned on."` while `BD_ENABLED` is off, before any
 other check. Every route but the telephony webhook needs the proposal tool's sign-in (401, the tool's
@@ -693,11 +705,15 @@ later week's list. Answers `{ "ok": true, "week": WeekView }` for the week it wa
 salesperson asks on their own list only (403 `"You can ask for more only on your own list."`); nobody
 left is 409 `"Everyone on your list is already covered this week."`.
 
-#### `POST /api/bd/tasks/{id}/done`, `.../snooze`, `.../reopen` (salesperson, own list)
+#### `POST /api/bd/tasks/{id}/done` (salesperson, own list)
 
-The task is looked up first (404 `"That task does not exist."`), then the role (403), then the list
-(403 `"That task is on someone else's list."`). `snooze` takes `{ "reason"? }` (text, 500 characters
-at most) and runs to the Monday after the task's week. A maintenance task whose contact is still due
+#### `POST /api/bd/tasks/{id}/snooze` (salesperson, own list)
+
+#### `POST /api/bd/tasks/{id}/reopen` (salesperson, own list)
+
+For all three: the task is looked up first (404 `"That task does not exist."`), then the role (403),
+then the list (403 `"That task is on someone else's list."`). `snooze` takes `{ "reason"? }` (text,
+500 characters at most) and runs to the Monday after the task's week. A maintenance task whose contact is still due
 cannot be marked done or skipped: 409 `"A maintenance follow-up stays on the list until you log a
 call, meeting, email or text."`. Done twice is 409 `"That task is already done."`; only an open task
 can be skipped; reopening an open task is 409 `"That task is already open."`.
@@ -1080,16 +1096,166 @@ Import }`; only a real run keeps the contacts and interactions it adds.
 
 ### Not built yet (503 after the role check)
 
-| Route | Who |
-|---|---|
-| `POST /api/bd/interactions/{id}/recommend` | salesperson |
-| `POST /api/bd/recommendations/{id}/confirm`, `.../dismiss` | salesperson |
-| `POST /api/bd/interactions/{id}/draft-followup`, `.../send-followup` | salesperson |
-| `GET /api/bd/review/candidates` (Potential BD Contacts) | salesperson, assistant, manager |
-| `POST /api/bd/review/candidates/{id}/add`, `.../ignore` (Potential BD Contacts) | salesperson, assistant |
-| `GET /api/bd/analytics`, `GET /api/bd/analytics/export.csv` (Analytics) | manager |
-| `POST /api/bd/contacts/{id}/merge` | assistant |
-| `POST /api/bd/webhooks/telephony/quo` | public (the provider's signature, once built); this exact path only |
+These routes come over from BD as placeholders (#802, Q1, Q32): each checks the caller's access
+exactly as the finished route will (no sign-in 401, no BD login or the wrong BD role 403), then
+answers 503 `"unavailable"` with `"This part is not built yet (Phase N)."` (`"(a later phase)."` for
+merge). They live in `backend/bd/routers/pending.py`. The rules below are BD's, kept here for when
+each route is built; a route that gets built loses "not built yet" from its heading and its line in
+`pending.py` in the same change. BD's service-token route (bd-candidates, the proposal tool's "Add to
+BD" button) is not carried over; Add to BD comes back as a direct in-app call (#816).
 
-BD admins and super admins pass every role check. BD's service-token route (bd-candidates) is not
-carried over.
+#### `POST /api/bd/contacts/{id}/merge` (assistant, admin; not built yet)
+
+Moves interactions, tasks and tags of `{id}` onto `into_id`, archives `{id}`, logs an event.
+
+```json
+{ "into_id": 21 }
+```
+
+```json
+{ "ok": true, "contact": { "id": 21, "name": "Dana Whitlow" }, "merged_id": 33 }
+```
+
+#### `POST /api/bd/interactions/{id}/recommend` (salesperson; not built yet)
+
+AI next action. Ask (again) for a suggestion on a logged entry. Runs the AI when `ai_enabled`, else the
+fallback table. Never fails just because the AI is down: it answers `source: "fallback"`.
+
+```json
+{}
+```
+
+```json
+{ "ok": true, "recommendation": { "id": 73, "contact_id": 25, "interaction_id": 104, "action": "Call about the clean room quote", "due_date": "2027-01-11", "reason": "Priya said the quote is in their January budget. Call early in January.", "source": "ai", "status": "pending", "created_at": "2026-11-03T12:06:00-06:00", "decided_at": null, "decided_by": null } }
+```
+
+#### `POST /api/bd/recommendations/{id}/confirm` (salesperson; not built yet)
+
+Accept as is (`{}`) or with changes. Sets the contact's `next_step` / `next_step_date`; if the customer
+asked for a date, send `"promised": true` to also set `promised_date`.
+
+```json
+{ "action": "Call about the clean room quote", "due_date": "2027-01-06", "promised": true }
+```
+
+```json
+{
+  "ok": true,
+  "recommendation": { "id": 73, "status": "changed", "due_date": "2027-01-06", "decided_at": "2026-11-04T10:50:00-06:00", "decided_by": { "id": 1, "name": "Avery Quill" } },
+  "contact": { "id": 25, "next_step": "Call about the clean room quote", "next_step_date": "2027-01-06", "promised_date": "2027-01-06" }
+}
+```
+
+#### `POST /api/bd/recommendations/{id}/dismiss` (salesperson; not built yet)
+
+```json
+{ "ok": true, "recommendation": { "id": 74, "status": "dismissed", "decided_at": "2026-11-04T10:52:00-06:00", "decided_by": { "id": 1, "name": "Avery Quill" } } }
+```
+
+#### `POST /api/bd/interactions/{id}/draft-followup` (salesperson; not built yet)
+
+The missed-call follow-up. `{id}` is the voicemail or no-answer call. Drafts from the contact, recent
+history and the attempt.
+
+```json
+{ "channel": "sms" }
+```
+
+```json
+{ "ok": true, "draft": { "id": 82, "contact_id": 26, "interaction_id": 108, "channel": "sms", "to": "+17855550105", "subject": null, "body": "Hi Owen, Avery at Treadwell. Just left you a voicemail about the shop floor. Is there a good time to talk this week?", "source": "fallback", "status": "draft" } }
+```
+
+#### `POST /api/bd/interactions/{id}/send-followup` (salesperson; not built yet)
+
+Sends the (possibly edited) draft, by email or by the phone provider for a text, and logs it as an
+`email`/`sms` interaction with `counts_as_touch: false`. Email sends only 8 am–6 pm Central (409
+otherwise). `{"channel": "none"}` records "Nothing" and hides the card.
+
+```json
+{ "draft_id": 81, "channel": "email", "subject": "Shop floor at Cedar Creek Concrete", "body": "Hi Priya,\n\nI tried you by phone on Monday about the shop floor. Is there a good time this week or next?\n\nThanks,\nAvery\nTreadwell" }
+```
+
+```json
+{
+  "ok": true,
+  "draft": { "id": 81, "status": "sent" },
+  "interaction": { "id": 1078, "contact_id": 25, "kind": "email", "direction": "out", "counts_as_touch": false, "occurred_at": "2026-11-04T10:55:00-06:00", "duration_s": null, "outcome": null, "summary": "Shop floor at Cedar Creek Concrete", "transcript": null, "recording_url": null, "provider": "resend", "external_id": "re_7d1f2c", "user": { "id": 1, "name": "Avery Quill" } }
+}
+```
+
+`{"channel": "none"}` answers with nothing sent:
+
+```json
+{ "ok": true, "draft": null, "interaction": null }
+```
+
+A second send for the same call is 409 ("A follow-up was already handled for this call."). A
+follow-up never counts toward pace and never closes a new or follow-up weekly task; the one exception
+is a `maintenance` task, which the email or text it logs closes (any logged follow-up does; see
+`POST /api/bd/contacts/{id}/interactions`).
+
+#### `GET /api/bd/review/candidates` (salesperson, assistant, manager; not built yet)
+
+Potential BD Contacts. Query: `status` (`new` (default) | `added` | `ignored` | `all`), `since` (a date,
+default 90 days ago, Central). Pulls fresh Direct quotes from the proposal tool and leaves out anyone
+already on the list by (normalized company, lower-case email). The page asks `?status=all` once and
+splits the answer into its three tabs.
+
+```json
+{
+  "ok": true,
+  "total": 1,
+  "items": [
+    { "id": 601, "project_id": "00000000-0000-4000-8000-000000000601", "project_name": "Tasting Room Floor", "company": "Brightwater Cider House", "contact_name": "Eli Marchetti", "email": "eli.marchetti@brightwater.example.com", "phone": "816-555-0181", "quote_total": 18450.0, "quote_date": "2026-10-09", "status": "new", "possible_duplicate": null }
+  ]
+}
+```
+
+#### `POST /api/bd/review/candidates/{id}/add` (salesperson, assistant; not built yet)
+
+One-click add. Creates the company (if new) and the contact with `source: "proposal_tool"` and
+`last_quote_date` = the quote date. Optional overrides:
+
+```json
+{ "category": "bd", "owner_id": 1, "lead_source": "Current Account" }
+```
+
+```json
+{ "ok": true, "candidate": { "id": 601, "status": "added" }, "contact": { "id": 37, "name": "Eli Marchetti", "company": { "id": 37, "name": "Brightwater Cider House" }, "source": "proposal_tool", "last_quote_date": "2026-10-09", "duplicate_of": null } }
+```
+
+#### `POST /api/bd/review/candidates/{id}/ignore` (salesperson, assistant; not built yet)
+
+```json
+{ "ok": true, "candidate": { "id": 602, "status": "ignored" } }
+```
+
+Add or ignore on a candidate that is no longer `new` is 409 with the page's own words: "Already added
+to BD." or "Already marked as not a BD contact." An unknown id is 404 ("That person is not on the
+review list.").
+
+#### `GET /api/bd/analytics` (manager; not built yet)
+
+Query: `from`, `to` (dates, default 1 Jan this year to today, Central), `owner` (user id, default
+all). A range whose start is after its end is 400. Response: `{ "ok": true, "analytics": Analytics }`
+(see the object above), counted as its metric table says.
+
+#### `GET /api/bd/analytics/export.csv` (manager; not built yet)
+
+Same query. Answers `text/csv`, one row per contact: company, name, owner, category, lead source,
+frequency, touches this year, last live, cadence status, confirmed. Not JSON.
+
+#### `POST /api/bd/webhooks/telephony/quo` (public: the provider's signature, once built; not built yet)
+
+The one BD route with no sign-in, at this exact path only (`main._AUTH_PUBLIC_PATHS` lists it; nothing
+else under `/api/bd/webhooks/` is public). Body is the provider's own payload (Quo first). Once built,
+the server verifies the signature (a bad one is 401), stores the event once (`integration_events`,
+keyed on provider + event id), matches the number by its last 10 digits, and creates or updates the
+interaction on `(provider, external_id)`. A later transcript or summary event updates the same row.
+Unknown numbers go to the unmatched calls.
+
+```json
+{ "ok": true, "event_id": "EVa1b2c3", "result": "interaction_updated", "interaction_id": 109 }
+```
+
+`result`: `interaction_created` | `interaction_updated` | `unmatched` | `duplicate` | `ignored`.

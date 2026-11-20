@@ -17,7 +17,9 @@ PENDING_ROUTES maps (method, path) -> the phase of BD's old build plan that buil
 
 BUILDING ONE OF THESE: implement it in its own router (a module listed in bd/routers/__init__.py).
 bd/api.py includes this module after them, so the real route wins at once; then delete its line
-here. tests/test_bd_app_shell.py checks every entry that is still served from here.
+here and "not built yet" from its heading in docs/bd/api-contract.md. tests/test_bd_app_shell.py
+checks every entry that is still served from here, and tests/test_bd_contract_routes.py that the
+contract says "not built yet" for exactly these routes.
 """
 from __future__ import annotations
 

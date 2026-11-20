@@ -240,3 +240,19 @@ _Avoid_: Extra 10, ten more, refill
 **Maintenance follow-up**:
 A task on This Week for one person at a Maintenance account whose follow-up is due. It sits under "Due now", above the Weekly 10 and outside it, and stays until a call, meeting, email or text is logged for that person.
 _Avoid_: Pinned task, maintenance task
+
+**BD Admin page**:
+The BD CRM's own Admin page, where a BD admin sets each person's BD login and BD role and the BD settings, an assistant handles Unmatched calls, and a salesperson or assistant runs a Workbook import. It is separate from the proposal tool's Admin page: neither changes what the other holds.
+_Avoid_: Admin (on its own, that is the proposal tool's), settings page
+
+**Workbook import**:
+Bringing BD contacts in from a workbook (.xlsx) or a .csv on the BD Admin page. A practice run shows what the file would add or change and keeps nothing; Import now keeps it. Importing the same file again keeps the edits made in the BD CRM since.
+_Avoid_: Upload, sync, dry run (the API's word for a practice run)
+
+**Unmatched call**:
+A call or text the phone system recorded whose number matched no BD contact. An assistant or BD admin puts it on a BD contact's history or dismisses it.
+_Avoid_: Missed call (that is one nobody answered), Not linked (that is a job with no Raken project)
+
+**Potential BD Contacts**:
+The monthly review of people on the proposal tool's recent Direct quotes who are not BD contacts yet, each added to the BD CRM or set aside. The page is in the BD CRM; the review itself is not built yet.
+_Avoid_: Candidates (the API's word), review list, leads
