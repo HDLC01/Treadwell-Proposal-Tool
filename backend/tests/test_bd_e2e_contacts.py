@@ -550,15 +550,19 @@ def test_the_import_menu_lists_upload_and_past_imports(page_as, expect):
 
 
 def test_to_tidy_counts_and_its_cards_filter_the_list(page_as, expect):
+    """Duplicates counts D. Whitlow (a flagged person, #810) and the seed's two likely account pairs
+    (#811: Cottonwood, Prairie Ridge): 3. Its filter lists both accounts of each pair with D. Whitlow's."""
     _, pg = page_as("/bd/contacts.html", CASEY)
     expect(pg.locator("#ct-tidy")).to_be_visible()
-    expect(pg.locator('[data-tidy="dupes"] .ct-tidy-n')).to_have_text("1")
+    expect(pg.locator('[data-tidy="dupes"] .ct-tidy-n')).to_have_text("3")
     expect(pg.locator('[data-tidy="confirm"] .ct-tidy-n')).to_have_text("10")
     expect(pg.locator('[data-tidy="unknown"] .ct-tidy-n')).to_have_text("1")
     pg.locator('[data-tidy="dupes"]').click()
     expect(pg.locator('[data-tidy="dupes"]')).to_have_attribute("aria-pressed", "true")
     expect(pg.locator('#ct-chips [data-chip="dupes"]')).to_have_attribute("aria-pressed", "true")
-    assert names(pg) == ["Prairie Ridge Builders, Inc."]
+    expect(pg.locator("#ct-dupes .ct-pair")).to_have_count(2)
+    assert names(pg) == ["Cottonwood & Sons Paving", "Cottonwood Sons Paving Co.", "Prairie Ridge Builders LLC",
+                         "Prairie Ridge Builders, Inc."]
     pg.locator('[data-tidy="dupes"]').click()                       # pressed again: lets go
     expect(accounts(pg)).to_have_count(8)
     pg.locator('[data-tidy="confirm"]').click()

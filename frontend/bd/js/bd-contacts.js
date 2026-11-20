@@ -21,6 +21,16 @@
  * for whoever made it: the toast offers Undo for a few seconds, and a line under the tabs (#ct-moved)
  * keeps one, focused after the move and announced, until the two minutes are up (WCAG 2.2.1).
  *
+ * LIKELY DUPLICATE BD ACCOUNTS (#811, Q21, Q36). On the Possible duplicates filter (?filter=dupes), for
+ * merge_companies, the mock-up's "Same account?" notes sit above the list (#ct-dupes): both names,
+ * their people, the shared phone or email domain the server found (a hint only), Merge and Keep
+ * separate. The list under them holds the flagged people's accounts (#810, unchanged), both accounts
+ * of each pair, and the survivor of each recent merge. Merge asks which name stays, in a dialog (a
+ * bottom sheet on a phone); the account whose name stays is the one that stays, so the line reads
+ * "Move 1 person from X into Y?". Every merge can be undone with no time limit: the toast offers Undo,
+ * and "Recently merged" (the server's latest 10) keeps one per merge. Keep separate is for good, so
+ * its toast has no Undo. To tidy's Duplicates card counts the pairs with the flagged people.
+ *
  * WHAT A PERSON MAY DO COMES FROM can (bd/auth.py can()), never from a role name:
  *   import          Import (a workbook, BD's practice run first: BD.importWorkbook)
  *   admin_area      To tidy this Friday (possible duplicates, people to confirm, unknown calls, each
@@ -29,13 +39,17 @@
  *   add_contact     Add contact, and "Add someone here" in an opened account
  *   clear_duplicate the Possible duplicates chip
  *   move_company    the "..." menu (Q5: never the assistant)
+ *   merge_companies the "Same account?" notes, Merge, Undo, Keep separate and Recently merged, and the
+ *                   pairs in To tidy's Duplicates count (Q21, Q36: never a salesperson or the manager)
  *   week without pick_owner (a salesperson, working their own list): BD's chips and sorts for them,
  *                   All and Mine and no "Last live talk" sort (BD's "no overdue pile" rule)
  *
  * Routes (docs/bd/api-contract.md): GET /api/bd/contacts/accounts (both tabs, paged at 500),
  * GET /api/bd/contacts/search, POST /api/bd/contacts/accounts/{id}/move,
  * POST /api/bd/contacts/accounts/moves/{id}/undo, GET /api/bd/admin/unmatched-calls,
- * POST /api/bd/admin/unmatched-calls/{id}/dismiss, GET /api/bd/admin/imports, POST /api/bd/admin/import.
+ * POST /api/bd/admin/unmatched-calls/{id}/dismiss, GET /api/bd/admin/imports, POST /api/bd/admin/import,
+ * GET /api/bd/contacts/accounts/duplicates (paged at 500), POST /api/bd/contacts/accounts/{id}/merge,
+ * POST /api/bd/contacts/accounts/merges/{id}/undo, POST /api/bd/contacts/accounts/duplicates/keep.
  * Dates are Central, from /api/bd/me's today (never the PC clock).
  */
 (function () {
@@ -58,6 +72,7 @@
     open: {}, sort: "name", chip: "all",
     q: "", hits: null, seq: 0, undo: null,
     unknown: null, unknownOpen: false, lastImport: null,
+    dupes: null, dupesErr: null, merging: {}, mergeToasts: {},
   };
 
   function $(id) { return document.getElementById(id); }
@@ -94,6 +109,28 @@
     });
   }
 
+  /** The likely duplicate account pairs and the recent merges (merge_companies only), every page of
+   *  pairs; the first answer's merges. A failure is kept to say on the filter, never thrown. */
+  function loadDupes() {
+    if (S.can.merge_companies !== true) return Promise.resolve();
+    var items = [], merges = null;
+    function next() {
+      return Api.get("/api/bd/contacts/accounts/duplicates?limit=" + PAGE + "&offset=" + items.length).then(function (r) {
+        var got = r.items || [];
+        items = items.concat(got);
+        if (merges === null) merges = r.merges || [];
+        return got.length && items.length < (Number(r.total) || 0) ? next() : null;
+      });
+    }
+    return next().then(function () {
+      S.dupes = { items: items, merges: merges || [] };
+      S.dupesErr = null;
+    }, function (e) {
+      S.dupes = null;
+      S.dupesErr = e;
+    });
+  }
+
   /** To tidy's calls and the Import menu's last run: optional, so a failure is nothing. */
   function loadExtras() {
     if (S.can.admin_area !== true) return Promise.resolve();
@@ -114,6 +151,7 @@
     var p = [];
     if (S.tab !== "bd") p.push("tab=" + S.tab);
     if (S.q) p.push("q=" + encodeURIComponent(S.q));
+    else if (S.tab === "bd" && S.chip !== "all") p.push("filter=" + encodeURIComponent(S.chip));
     try {
       window.history.replaceState(null, "", window.location.pathname + (p.length ? "?" + p.join("&") : ""));
     } catch (e) { /* the address just stays */ }
@@ -136,6 +174,23 @@
 
   function sortAllowed(v) { return !(v === "last" && S.ownList) && SORTS.some(function (s) { return s[0] === v; }); }
 
+  /** The "Same account?" notes show: merge_companies, on the Possible duplicates filter of the BD tab. */
+  function dupesView() {
+    return S.can.merge_companies === true && S.tab === "bd" && !S.hits && S.chip === "dupes";
+  }
+  function pairsOf() { return S.dupes ? S.dupes.items : []; }
+
+  /** {account id: true} for both accounts of each likely pair and the survivor of each recent merge:
+   *  the Possible duplicates filter lists them beside the flagged people's accounts. Nothing unless
+   *  the pairs loaded, which they do for merge_companies only (loadDupes). */
+  function dupeAccounts() {
+    var out = {};
+    if (!S.dupes) return out;
+    pairsOf().forEach(function (d) { out[d.a.id] = true; out[d.b.id] = true; });
+    S.dupes.merges.forEach(function (m) { if (m.into) out[m.into.id] = true; });
+    return out;
+  }
+
   var COMPARE = {
     // the server's order is by name already; the index keeps it for ties
     name: function (a, b) { return a._i - b._i; },
@@ -157,7 +212,8 @@
       list = list.filter(function (a) { return !!hits[a.id]; });
     } else if (S.tab === "bd" && S.chip !== "all") {
       var c = chipOf(S.chip);
-      if (c) list = list.filter(function (a) { return (a.people || []).some(c.test); });
+      var also = S.chip === "dupes" ? dupeAccounts() : {};
+      if (c) list = list.filter(function (a) { return !!also[a.id] || (a.people || []).some(c.test); });
     }
     var cmp = COMPARE[S.sort] || COMPARE.name;
     return list.map(function (a, i) { return { a: a, _i: i }; }).sort(cmp).map(function (x) { return x.a; });
@@ -204,7 +260,8 @@
   function tidyCards() {
     var bd = [];
     S.lists.bd.forEach(function (a) { bd = bd.concat(a.people || []); });
-    var dup = bd.filter(function (p) { return !!p.duplicate_of; }).length;
+    // the flagged people (#810) and the likely account pairs (#811; loaded for merge_companies only), as the mock-up counts
+    var dup = bd.filter(function (p) { return !!p.duplicate_of; }).length + pairsOf().length;
     var conf = bd.filter(function (p) { return p.confirmed === false; }).length;
     var cards = [];
     if (S.can.clear_duplicate === true) {
@@ -543,10 +600,11 @@
     if (had) focusId("ct-tab-" + S.tab);
   }
 
-  /** Both tabs again, after a move, its Undo or an import; a search on show is asked again too, so its
-   *  hits follow a company to the tab it is on now. */
+  /** Both tabs again (and the likely duplicate pairs, for merge_companies), after a move, a merge, an
+   *  Undo or an import; a search on show is asked again too, so its hits follow a company to the tab it
+   *  is on now. */
   function reload() {
-    return loadLists().then(function () { return S.q ? search(S.q, true) : render(); });
+    return Promise.all([loadLists(), loadDupes()]).then(function () { return S.q ? search(S.q, true) : render(); });
   }
 
   function move(btn) {
@@ -604,11 +662,217 @@
     });
   }
 
+  // ── likely duplicate BD accounts (#811) ────────────────────────────────────────────────────
+  function quoted(s) { return "“" + s + "”"; }
+  function joinAnd(xs) { return xs.length > 1 ? xs.slice(0, -1).join(", ") + " and " + xs[xs.length - 1] : xs.join(""); }
+
+  /** What the two accounts share, as words: a hint only (a shared phone or a work email domain). */
+  function hintWords(h) {
+    var phones = ((h && h.phones) || []).map(function (p) { return BD.fmtPhone(p) || p; });
+    var domains = (h && h.email_domains) || [];
+    var ph = phones.length ? "have the " + (phones.length === 1 ? "phone " : "phones ") + joinAnd(phones) : "";
+    var dm = domains.length ? "use the email " + (domains.length === 1 ? "domain " : "domains ") + joinAnd(domains) : "";
+    if (!ph && !dm) return "No shared phone or email domain.";
+    return "Both " + (ph && dm ? ph + " and " + dm : ph || dm) + ".";
+  }
+
+  /** The side Merge offers to keep: the one with more people (fewer move), the first on a tie. */
+  function keepSide(d) { return (Number(d.b.people_count) || 0) > (Number(d.a.people_count) || 0) ? d.b : d.a; }
+
+  function pairKey(d) { return d.a.id + "-" + d.b.id; }
+  function pairByKey(k) { return pairsOf().filter(function (d) { return pairKey(d) === k; })[0] || null; }
+
+  function pairHtml(d) {
+    var keep = keepSide(d);
+    var k = pairKey(d);
+    return '<li class="ct-pair" data-pair="' + esc(k) + '"><span class="ct-pair-ico">' + ico("copy", 18) + "</span>" +
+      '<div class="ct-pair-main"><p class="ct-pair-text"><strong>Same account?</strong> ' +
+      esc(quoted(d.a.name)) + " (" + esc(peopleWord(Number(d.a.people_count) || 0)) + ") and " +
+      esc(quoted(d.b.name)) + " (" + esc(peopleWord(Number(d.b.people_count) || 0)) + "). " + esc(hintWords(d.hints)) + "</p>" +
+      '<div class="wrap-row ct-pair-acts">' +
+      '<button type="button" class="btn btn-sm btn-primary" id="ct-merge-' + esc(k) + '" data-act="merge">Merge into ' +
+      esc(keep.name) + "</button>" +
+      '<button type="button" class="btn btn-sm" id="ct-keep-' + esc(k) + '" data-act="keep">Keep separate' +
+      '<span class="sr-only">: ' + esc(d.a.name) + " and " + esc(d.b.name) + "</span></button>" +
+      "</div></div></li>";
+  }
+
+  /** One merge in Recently merged: what went where, who did it and when, and its Undo. */
+  function mergedHtml(m) {
+    var was = m.name_before && m.name_before !== m.into.name ? m.name_before : m.into.name;
+    var what = m.account.name + " into " + was;
+    return '<li class="ct-merged-row"><span class="ct-merged-main"><span class="ct-merged-what">' + esc(what) +
+      (was !== m.into.name ? ", now named " + esc(m.into.name) : "") + "</span>" +
+      '<span class="ct-merged-sub">' + esc(peopleWord(Number(m.people) || 0)) + " moved · " + esc(BD.fmtDay(m.at, S.today)) +
+      (m.by && m.by.name ? " by " + esc(BD.nameOf(m.by)) : "") + "</span></span>" +
+      '<button type="button" class="btn-link ct-unmerge" id="ct-unmerge-' + esc(m.id) + '" data-act="unmerge" data-id="' +
+      esc(m.id) + '">Undo<span class="sr-only"> merging ' + esc(what) + "</span></button></li>";
+  }
+
+  function renderDupes() {
+    var box = $("ct-dupes");
+    if (!box) return;
+    box.hidden = !dupesView();
+    if (box.hidden) { box.innerHTML = ""; return; }
+    if (!S.dupes) {
+      box.innerHTML = '<p class="panel-warn ct-dupes-err">' + ico("warning", 18) + "<span>" +
+        esc(S.dupesErr ? errText(S.dupesErr) : "Loading...") + "</span></p>";
+      return;
+    }
+    var pairs = pairsOf(), merges = S.dupes.merges;
+    box.innerHTML = (pairs.length
+      ? '<ul class="ct-pairs">' + pairs.map(pairHtml).join("") + "</ul>"
+      : '<p class="ct-pairs-none">' + ico("check-circle", 18) + "<span>No two accounts look like the same company.</span></p>") +
+      (merges.length
+        ? '<h2 class="ct-merged-h" id="ct-merged-h">Recently merged</h2><ul class="ct-merged" aria-labelledby="ct-merged-h">' +
+          merges.map(mergedHtml).join("") + "</ul>"
+        : "");
+  }
+
+  /** Focus after the duplicates view redrew: the first of `ids` still there, else the filter's chip. */
+  function focusAfterDupes(ids) {
+    for (var i = 0; i < ids.length; i += 1) {
+      var el = ids[i] && $(ids[i]);
+      if (el) { el.focus(); return; }
+    }
+    var chip = document.querySelector('#ct-chips [data-chip="dupes"]');
+    if (chip) chip.focus(); else focusId("ct-tab-" + S.tab);
+  }
+
+  /** The words above Merge, for keeping `into` and moving `from`'s people. */
+  function mergeLine(from, into) {
+    var n = Number(from.people_count) || 0;
+    return n
+      ? "Move " + peopleWord(n) + " from " + from.name + " into " + into.name + "?"
+      : "Merge " + from.name + " into " + into.name + "? Nobody there needs to move.";
+  }
+
+  /** Asks which name stays (a dialog; a bottom sheet on a phone). Resolves {into, from} or null. */
+  function askMerge(d) {
+    return new Promise(function (resolve) {
+      var sides = [d.a, d.b];
+      var first = keepSide(d);
+      var el = document.createElement("div");
+      el.className = "dialog ct-merge-dlg";
+      el.setAttribute("aria-labelledby", "ct-merge-title");
+      el.setAttribute("aria-describedby", "ct-merge-line");
+      el.innerHTML = '<h2 class="dialog-title" id="ct-merge-title">Merge into one account?</h2>' +
+        '<fieldset class="ct-merge-pick"><legend class="ct-merge-legend">Which name stays?</legend>' +
+        sides.map(function (s) {
+          var sub = peopleWord(Number(s.people_count) || 0) + (s.city ? " · " + s.city : "");
+          return '<label class="ct-merge-opt"><input type="radio" name="ct-merge-name" value="' + esc(s.id) + '"' +
+            (s === first ? " checked" : "") + ' /><span class="ct-merge-opt-text"><span class="ct-merge-opt-name">' +
+            esc(s.name) + '</span><span class="ct-merge-opt-sub">' + esc(sub) + "</span></span></label>";
+        }).join("") + "</fieldset>" +
+        '<p class="dialog-text ct-merge-line" id="ct-merge-line" aria-live="polite"></p>' +
+        '<p class="ct-merge-small">Each person keeps their owner, history and tasks. You can undo this.</p>' +
+        '<div class="dialog-actions"><button type="button" class="btn" data-act="no">Cancel</button>' +
+        '<button type="button" class="btn btn-primary" data-act="yes">Merge</button></div>';
+      var answer = null;
+      var picked = function () {
+        var on = el.querySelector('input[name="ct-merge-name"]:checked');
+        var into = on && String(on.value) === String(d.b.id) ? d.b : d.a;
+        return { into: into, from: into === d.a ? d.b : d.a };
+      };
+      var line = function () {
+        var p = picked();
+        el.querySelector("#ct-merge-line").textContent = mergeLine(p.from, p.into);
+      };
+      line();
+      el.addEventListener("change", line);
+      el.addEventListener("click", function (e) {
+        var b = e.target.closest && e.target.closest("[data-act]");
+        if (!b) return;
+        answer = b.getAttribute("data-act") === "yes" ? picked() : null;
+        BD.sheet.close(el, answer ? "yes" : "no");
+      });
+      BD.sheet.open(el, {
+        initialFocus: 'input[name="ct-merge-name"]:checked',
+        onClose: function () {
+          setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 220);
+          resolve(answer);
+        },
+      });
+    });
+  }
+
+  function merge(btn) {
+    var li = btn.closest(".ct-pair");
+    var d = li && pairByKey(li.getAttribute("data-pair"));
+    if (!d) return;
+    askMerge(d).then(function (p) {
+      if (!p) return;
+      BD.setBusy(btn, true);
+      // The account whose name stays is the one that stays: both choices are sent, as the route asks.
+      Api.post(Api.path("contacts", "accounts", p.from.id, "merge"), { into: p.into.id, name_from: p.into.id }).then(function (r) {
+        var m = r.merge || {};
+        var into = m.into || p.into;
+        var words = "Merged. " + into.name + " now has " + peopleWord(Number(m.people_count) || 0) + ".";
+        S.open[key("bd", into.id)] = true;
+        var offer = function () {
+          // Its handle is kept by the merge's id, so an Undo from Recently merged closes the toast's Undo too.
+          S.mergeToasts[m.id] = BD.toast(words, { kind: "ok", ms: UNDO_MS,
+            action: { label: "Undo", onClick: function () { undoMerge(m.id); } },
+            onGone: function () { delete S.mergeToasts[m.id]; } });
+          focusAfterDupes(["ct-unmerge-" + m.id]);
+          BD.announce(words + " Undo is available.");
+        };
+        // The merge is made: its Undo is offered even when the page then fails to reload.
+        return reload().then(offer, offer);
+      }, function (e) {
+        BD.setBusy(btn, false);
+        BD.toast(errText(e), { kind: "error" });
+      });
+    });
+  }
+
+  function undoMerge(id) {
+    if (S.merging[id]) return;
+    S.merging[id] = true;
+    if (typeof S.mergeToasts[id] === "function") S.mergeToasts[id]();
+    Api.post(Api.path("contacts", "accounts", "merges", id, "undo"), {}).then(function (r) {
+      var u = r.undone || {};
+      var words = u.account && u.into ? "Put back: " + u.account.name + " and " + u.into.name + " are two accounts again." : "Merge undone.";
+      var said = function () {
+        delete S.merging[id];
+        BD.toast(words, { kind: "ok" });
+      };
+      return reload().then(function () {
+        var k = u.account && u.into ? (u.account.id < u.into.id ? u.account.id + "-" + u.into.id : u.into.id + "-" + u.account.id) : "";
+        focusAfterDupes([k && "ct-merge-" + k]);
+        said();
+      }, said);
+    }, function (e) {
+      delete S.merging[id];
+      BD.toast(errText(e), { kind: "error" });
+    });
+  }
+
+  function keepSeparate(btn) {
+    var li = btn.closest(".ct-pair");
+    var d = li && pairByKey(li.getAttribute("data-pair"));
+    if (!d) return;
+    BD.setBusy(btn, true);
+    Api.post(Api.path("contacts", "accounts", "duplicates", "keep"), { accounts: [d.a.id, d.b.id] }).then(function () {
+      var pairs = pairsOf();
+      var at = pairs.indexOf(d);
+      S.dupes.items = pairs.filter(function (x) { return x !== d; });
+      render();
+      var nextPair = S.dupes.items[at] || S.dupes.items[at - 1];
+      focusAfterDupes([nextPair && "ct-merge-" + pairKey(nextPair)]);
+      BD.toast("Kept as two accounts: " + d.a.name + " and " + d.b.name + ".", { kind: "ok" });
+    }, function (e) {
+      BD.setBusy(btn, false);
+      BD.toast(errText(e), { kind: "error" });
+    });
+  }
+
   // ── drawing it all ─────────────────────────────────────────────────────────────────────────
   function render() {
     renderHead();
     renderTools();
     renderTidy();
+    renderDupes();
     renderList();
   }
 
@@ -695,6 +959,17 @@
       moved.addEventListener("click", function (e) {
         var b = e.target.closest && e.target.closest("#ct-moved-undo");
         if (b && S.undo && !S.undo.busy) undo(S.undo.m, S.undo.a);
+      });
+    }
+    var dupes = $("ct-dupes");
+    if (dupes) {
+      dupes.addEventListener("click", function (e) {
+        var b = e.target.closest && e.target.closest("[data-act]");
+        if (!b || b.disabled) return;
+        var act = b.getAttribute("data-act");
+        if (act === "merge") merge(b);
+        else if (act === "keep") keepSeparate(b);
+        else if (act === "unmerge") undoMerge(b.getAttribute("data-id"));
       });
     }
     var count = $("ct-count");
@@ -803,9 +1078,12 @@
     show("ct-add", S.can.add_contact === true);
     S.q = (BD.qs("q") || "").trim();
     if (BD.qs("tab") === "maintenance") S.tab = "maintenance";
+    // ?filter= names a BD-tab chip; one this person does not have is no filter.
+    var filter = BD.qs("filter");
+    if (S.tab === "bd" && filter && chipOf(filter)) S.chip = filter;
     var company = BD.qs("company");
     wire();
-    return Promise.all([loadLists(), loadExtras()]).then(function () {
+    return Promise.all([loadLists(), loadExtras(), loadDupes()]).then(function () {
       var target = company ? openCompany(company) : null;
       if (S.q) return search(S.q);
       render();
