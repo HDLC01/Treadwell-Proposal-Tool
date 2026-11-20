@@ -50,18 +50,17 @@ from fastapi import Body, Depends, Path, Request
 
 from .. import auth, db, errors, normalize, paging, serialize, web
 from .. import contacts_service as cs
-from ..contacts_service import COMPANY_NOT_FOUND, FIX
+from ..contacts_service import ALREADY_MERGED, COMPANY_NOT_FOUND, FIX
 from ..events import log_event
 
 router = web.make_router()
 
 MERGE_ROLES = ("assistant",)        # and admins (Q21, Q36); require_role adds them
-MERGED = "company_merged"
-UNDONE = "company_merge_undone"
+MERGED = cs.MERGED_EVENT            # "company_merged"; contacts_service reads it too
+UNDONE = cs.UNDONE_EVENT            # "company_merge_undone"
 MERGES_SHOWN = 10                   # the "Recently merged" list's length
 
 MERGE_NOT_FOUND = "That merge does not exist."
-ALREADY_MERGED = "This account is already merged into another."
 INTO_MERGED = "That account was merged into another, so nothing can merge into it."
 ALREADY_UNDONE = "This merge is already undone."
 CHANGED_SINCE = "Something changed since this merge, so it can't be undone."

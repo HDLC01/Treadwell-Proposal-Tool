@@ -12,6 +12,9 @@ duplicate check and the insert are bd/contacts_service.py's, shared with the con
 Who:
     GET (list, one)   any BD role
     POST, PATCH       salesperson, assistant, admin
+
+An account merged away (#811) is left out of the type-ahead, and PATCH refuses it (409), so Undo
+brings it back exactly as it was.
 """
 from __future__ import annotations
 
@@ -20,8 +23,8 @@ from typing import Any
 from fastapi import Body, Depends, Request
 
 from .. import auth, db, errors, paging, serialize, web
-from ..contacts_service import (COMPANY_NOT_FOUND, FIX, NAME_MAX, TEXT_DEFAULT_MAX, find_duplicates, insert_company,
-                                too_long)
+from ..contacts_service import (ALREADY_MERGED, COMPANY_NOT_FOUND, FIX, NAME_MAX, TEXT_DEFAULT_MAX, find_duplicates,
+                                insert_company, too_long)
 from ..normalize import clean_name, normalize_company
 
 router = web.make_router()
@@ -114,8 +117,13 @@ def patch_company(id: str, body: Any = Body(None), user: dict = Depends(auth.req
         raise errors.bad_request(FIX, fields)
     cid = paging.path_id(id, COMPANY_NOT_FOUND)
     with db.connect() as conn:
-        if conn.execute("select id from companies where id = %s", (cid,)).fetchone() is None:
+        # Locked, so a merge in flight finishes first and its mark is seen here. A merged-away account
+        # is hidden and frozen until Undo brings it back as it was (#811).
+        found = conn.execute("select merged_into from companies where id = %s for update", (cid,)).fetchone()
+        if found is None:
             raise errors.not_found(COMPANY_NOT_FOUND)
+        if found["merged_into"] is not None:
+            raise errors.conflict(ALREADY_MERGED)
         sets, params = [], []
         if name is not None:
             sets += ["name = %s", "normalized_name = %s"]

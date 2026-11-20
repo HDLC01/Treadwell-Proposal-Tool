@@ -310,6 +310,93 @@ def test_a_person_added_by_a_merged_accounts_name_or_id_lands_on_the_survivor(bd
     assert added({"id": a}) == b                         # an id still leads where its merge went
 
 
+def _tallgrass(db):
+    """Two accounts whose cleaned names differ ("tallgrass const" and "tallgrass construction"), one
+    made-up person at each: Wren Hale at a, Opal Hale at b."""
+    a = company(db, "Tallgrass Const. LLC")
+    b = company(db, "Tallgrass Construction")
+    return a, b, person(db, a, "Wren Hale"), person(db, b, "Opal Hale")
+
+
+def _same_name(client, company_name):
+    r = client.get("/api/bd/contacts/duplicates", params={"company": company_name})
+    assert r.status_code == 200, r.text
+    return [(m["contact_id"], m["company"], m["reason"]) for m in r.json()["items"]]
+
+
+def test_add_contacts_same_name_warning_names_everyone_at_the_account_the_name_leads_to(bd_seeded, bd_as_user, bd_db):
+    """Before the merge, "Tallgrass Const. LLC" warns of Wren. After it, that name leads to b, which
+    holds Wren and Opal, so the person adding a third sees both (verifier, #811)."""
+    casey = bd_as_user(CASEY)
+    a, b, wren, opal = _tallgrass(bd_db)
+    assert _same_name(casey, "Tallgrass Const. LLC") == [(wren, "Tallgrass Const. LLC", "Same company name")]
+    merge(casey, a, b, name_from=b)
+    both = [(wren, "Tallgrass Construction", "Same company name"), (opal, "Tallgrass Construction", "Same company name")]
+    assert _same_name(casey, "Tallgrass Const. LLC") == both
+    r = casey.post("/api/bd/contacts", json={"name": "Nell Brandt", "company": {"name": "Tallgrass Const. LLC"}})
+    assert r.status_code == 201, r.text
+    assert r.json()["contact"]["company"]["id"] == b
+    assert [(m["contact_id"], m["reason"]) for m in r.json()["possible_duplicates"]] == [
+        (wren, "Same company name"), (opal, "Same company name")]
+    assert r.json()["contact"]["duplicate_of"]["contact_id"] == wren
+
+
+def test_the_survivors_old_name_still_leads_to_it_after_a_merge_renamed_it(bd_seeded, bd_as_user, bd_db):
+    """Merging a into b and keeping a's name renames b "Tallgrass Const. LLC". Its old name,
+    "Tallgrass Construction", must still lead to b: Add contact, the warning and the import put the
+    person there and make no new account (verifier, #811)."""
+    casey = bd_as_user(CASEY)
+    a, b, wren, opal = _tallgrass(bd_db)
+    merge(casey, a, b, name_from=a)
+    assert company_row(bd_db, b)["name"] == "Tallgrass Const. LLC"
+    accounts = bd_db.execute("select count(*) as n from bd.companies").fetchone()["n"]
+    assert [m[0] for m in _same_name(casey, "Tallgrass Construction")] == [wren, opal]
+    r = casey.post("/api/bd/contacts", json={"name": "Nell Brandt", "company": {"name": "Tallgrass Construction"}})
+    assert r.status_code == 201, r.text
+    assert r.json()["contact"]["company"]["id"] == b
+    csv = b"Company,Name,Email\nTallgrass Construction,Ruth Ober,ruth@tallgrass.example.com\n"
+    r = casey.post("/api/bd/admin/import", files={"file": ("people.csv", io.BytesIO(csv), "text/csv")},
+                   data={"dry_run": "false"})
+    assert r.status_code == 200, r.text
+    assert bd_db.execute("select company_id from bd.contacts where name = 'Ruth Ober'").fetchone()["company_id"] == b
+    assert bd_db.execute("select count(*) as n from bd.companies").fetchone()["n"] == accounts
+
+
+def test_an_undone_renaming_merge_leaves_no_trail_and_a_live_account_wins_over_one(bd_seeded, bd_as_user, bd_db):
+    """After Undo the merge never happened: renaming b by hand afterwards frees its old name, so Add
+    contact by that name makes a new account. And while a renaming merge stands, an account that
+    really has the old name is the one a person joins."""
+    casey = bd_as_user(CASEY)
+    a, b, _wren, _opal = _tallgrass(bd_db)
+    m = merged(casey, a, b, name_from=a)
+    assert casey.post(UNDO % m["id"], json={}).status_code == 200
+    assert casey.patch("/api/bd/companies/%s" % b, json={"name": "Tallgrass Group"}).status_code == 200
+
+    def added(name):
+        r = casey.post("/api/bd/contacts", json={"name": "Nell Brandt", "company": {"name": name}})
+        assert r.status_code == 201, r.text
+        return r.json()["contact"]["company"]["id"]
+
+    fresh = added("Tallgrass Construction")
+    assert fresh not in (a, b)
+    c, d = company(bd_db, "Bluff Road Paving Inc."), company(bd_db, "Bluff Rd Paving")
+    merge(casey, c, d, name_from=c)                     # d is now "Bluff Road Paving Inc."
+    e = company(bd_db, "Bluff Rd Paving")
+    assert added("Bluff Rd Paving") == e
+
+
+@pytest.mark.parametrize("user", [AVERY, CASEY])
+def test_a_merged_away_account_cannot_be_edited(bd_seeded, bd_as_user, bd_db, user):
+    """It is hidden and frozen until Undo, so Undo brings it back as it was (verifier, #811)."""
+    merge(bd_as_user(CASEY), 13, 12, name_from=12)
+    before = state(bd_db)
+    for body in ({"name": "Renamed Hidden Co"}, {"city": "Olathe"}, {}):
+        r = bd_as_user(user).patch("/api/bd/companies/13", json=body)
+        assert (r.status_code, r.json()["message"]) == (409, "This account is already merged into another."), r.text
+    assert state(bd_db) == before
+    assert bd_as_user(user).patch("/api/bd/companies/12", json={"city": "Olathe"}).status_code == 200
+
+
 def test_an_import_never_puts_a_person_on_a_merged_account(bd_seeded, bd_as_user, bd_db):
     casey = bd_as_user(CASEY)
     merge(casey, 12, 13, name_from=13)

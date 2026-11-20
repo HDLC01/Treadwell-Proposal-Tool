@@ -222,7 +222,7 @@ Two BD accounts whose names are the same once cleaned of endings such as LLC, of
 _Avoid_: Possible duplicate (that is one person), duplicate company
 
 **Merged account**:
-A BD account whose people were all moved into another BD account by a merge, each keeping their owner. It is kept, marked with who merged it and when, and hidden from the Contacts page, its search and Add contact. Every merge can be undone. The code and its event log call this a company merge (company_merged, merge_companies), the database table's word.
+A BD account whose people were all moved into another BD account by a merge, each keeping their owner. It is kept, marked with who merged it and when, and hidden from the Contacts page, its search and Add contact, and nobody can edit it. Every merge can be undone, which brings it back as it was. The code and its event log call this a company merge (company_merged, merge_companies), the database table's word.
 _Avoid_: Deleted account, duplicate account
 
 **Logged entry**:

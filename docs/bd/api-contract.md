@@ -810,7 +810,10 @@ out unless `archived=true`. `q` is text, never a pattern. Answers `{ "ok": true,
 Add contact's "this person may already exist" check. Query: `company` and/or `email` and/or `phone`,
 and `except` (a contact id to leave out, for the contact being edited). Every contact that is not
 archived at a company with the same cleaned name, else with the same email (any case), else the same
-phone (any format), in id order, each once with the first reason that matches.
+phone (any format), in id order, each once with the first reason that matches. "The same cleaned name"
+follows merges (#811): it covers the account a merged-away account with that name went into, and the
+survivor a merge renamed away from that name, so the people at the account Add contact would join are
+named.
 
 ```json
 {
@@ -830,7 +833,9 @@ That is `?company=Cedar Creek Concrete&phone=785.555.0105`. `reason`: `Same comp
 Add contact. `company` is `{ "id" }` (an existing one; 404 `"That company does not exist."`) or
 `{ "name" }` (the company with the same cleaned name, else a new one with the contact's `city` and
 `industry`). An account merged away (#811) is never the one: its id, or a name only it has, leads to the
-account it was merged into, and a name a live account also has finds the live one. The owner defaults to the caller when they are a salesperson, else the first active
+account it was merged into, and a name a live account also has finds the live one. A survivor's old
+name, which a merge renamed away (`name_from`), still leads to the survivor while the merge stands, so
+neither Add contact nor the import makes a new account under it; Undo ends that. The owner defaults to the caller when they are a salesperson, else the first active
 salesperson. Text is trimmed; a client never sets `source` (always `manual`) or a derived field. A
 possible duplicate is saved anyway (**201**) with `duplicate_of` set to the first match, and the
 matches come back as `possible_duplicates`.
@@ -1115,7 +1120,9 @@ and maintenance, archived too, so nobody is left on a hidden account), each **ke
 owner** (Q33); their history, tasks and recommendations point at the person, so they follow. The
 survivor takes the picked name. `{id}` is not deleted: it is marked merged into the survivor, with who
 and when, and the account list, search and the type-ahead never show it again. Add contact and the
-import never put a person on it: its name or id leads to the account it was merged into. One event,
+import never put a person on it: its name or id leads to the account it was merged into, and nobody
+can edit it (`PATCH /api/bd/companies/{id}` is 409). When the survivor takes `{id}`'s name, its old
+name still leads to it (Add contact above). One event,
 `company_merged`, by the caller, with no contact: `{ "company_id", "into", "name_from", "name_before",
 "name_after", "contacts": [ids moved], "people" }`. Ids and account names only, never a person's name,
 phone or email.
@@ -1189,7 +1196,9 @@ Add contact (400 `"Keep this to 200 characters or fewer."`).
 
 Any of `name` (blank is 400 `"A company needs a name."`), `city`, `industry` (text or `null`). A
 rename moves the cleaned name with it, so the duplicate check and Add contact find the new name.
-The same 200-character limits as `POST`. `{ "ok": true, "company": Company }`.
+The same 200-character limits as `POST`. `{ "ok": true, "company": Company }`. An account merged away
+(#811) is refused, changing nothing: 409 `"This account is already merged into another."`; it stays as
+it was until Undo brings it back.
 
 ### Admin (#809)
 
