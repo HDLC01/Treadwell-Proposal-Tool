@@ -245,6 +245,32 @@ def test_a_search_in_the_address_is_run_on_arrival(page_as, expect):
     expect(pg.locator("#ct-q")).to_have_value("lena")
 
 
+def test_a_search_with_hits_on_both_tabs_highlights_each_on_its_own_tab(page_as, expect):
+    """"nd", worked from the seed: no account name holds it; on the BD tab Priya Nandan (Cedar Creek
+    Concrete) and Rory Sandell (Prairie Ridge Builders, Inc., where D. Whitlow does not match); on the
+    Maintenance tab Nora Lindqvist (Kaw Valley Cold Storage), not Hal Brecken."""
+    _, pg = page_as("/bd/contacts.html", AVERY)
+    search(pg, "nd")
+    expect(pg.locator("#ct-count")).to_contain_text("2 accounts and 2 people match.")
+    expect(pg.locator("#ct-tab-bd")).to_have_attribute("aria-selected", "true")
+    assert names(pg) == ["Cedar Creek Concrete", "Prairie Ridge Builders, Inc."]
+    expect(pg.locator(".ct-person.is-match")).to_have_count(2)
+    assert pg.locator(".ct-person.is-match").evaluate_all("els => els.map(e => e.dataset.contact)") == ["25", "22"]
+    expect(acct(pg, 11).locator('.ct-person[data-contact="33"]')).not_to_have_class(re.compile(r"\bis-match\b"))
+    expect(pg.locator("#bd-live")).to_have_text("2 accounts and 2 people match. 1 more on the Maintenance tab.")
+    pg.locator("#ct-count").get_by_role("button", name="1 more on the Maintenance tab.").click()
+    expect(pg.locator("#ct-tab-maintenance")).to_have_attribute("aria-selected", "true")
+    expect(pg.locator("#ct-tab-maintenance")).to_be_focused()
+    assert names(pg) == ["Kaw Valley Cold Storage"]
+    expect(pg.locator(".ct-person.is-match")).to_have_count(1)
+    expect(pg.locator(".ct-person.is-match")).to_have_attribute("data-contact", "31")
+    expect(acct(pg, 17).locator('.ct-person[data-contact="30"]')).not_to_have_class(re.compile(r"\bis-match\b"))
+    expect(pg.locator("#ct-count")).to_contain_text("Nora Lindqvist at Kaw Valley Cold Storage.")
+    pg.locator("#ct-count").get_by_role("button", name="2 more on the BD tab.").click()
+    expect(pg.locator("#ct-tab-bd")).to_have_attribute("aria-selected", "true")
+    expect(pg.locator(".ct-person.is-match")).to_have_count(2)
+
+
 # ── the "..." menu: make a maintenance account, move back to BD (2026-11-20) ──────────────────────
 def test_the_menu_opens_from_the_button_by_keyboard_and_from_a_right_click(page_as, expect):
     _, pg = page_as("/bd/contacts.html", AVERY)
@@ -295,6 +321,40 @@ def test_make_maintenance_account_then_undo(page_as, expect):
     assert [t["status"] for t in week["tasks"] if t["id"] == 302] == ["open"]
 
 
+def test_a_move_during_a_search_follows_the_company_to_its_tab(page_as, expect):
+    """"prairie ridge" finds both Prairie Ridge accounts on the BD tab. Once Prairie Ridge Builders LLC
+    is a maintenance account, the search says 1 account here and 1 more on the Maintenance tab, where
+    the LLC now is."""
+    _, pg = page_as("/bd/contacts.html", AVERY)
+    search(pg, "prairie ridge")
+    expect(pg.locator("#ct-count")).to_contain_text("2 accounts match.")
+    acct(pg, 10).locator("[data-more]").click()
+    pg.locator('.menu [data-act="to-maintenance"]').click()
+    pg.locator(".dialog.is-open").get_by_role("button", name="Make maintenance account").click()
+    expect(toasts(pg)).to_contain_text("Prairie Ridge Builders LLC is a maintenance account.")
+    expect(pg.locator("#ct-count")).to_contain_text("1 account matches. 1 more on the Maintenance tab.")
+    assert names(pg) == ["Prairie Ridge Builders, Inc."]
+    pg.locator("#ct-count").get_by_role("button", name="1 more on the Maintenance tab.").click()
+    assert names(pg) == ["Prairie Ridge Builders LLC"]
+
+
+def test_the_undo_is_offered_even_when_the_list_then_fails_to_load(page_as, expect):
+    """The move is made by the time the list is asked for again: a failed reload must not swallow
+    its Undo (nor raise an unhandled error)."""
+    _, pg = page_as("/bd/contacts.html", AVERY)
+    lists = re.compile(r"/api/bd/contacts/accounts\?category=")
+    acct(pg, 10).locator("[data-more]").click()
+    pg.locator('.menu [data-act="to-maintenance"]').click()
+    pg.route(lists, lambda r: r.fulfill(status=500, content_type="application/json",
+                                        body='{"ok": false, "error": {"code": "server_error", "message": "No."}}'))
+    pg.locator(".dialog.is-open").get_by_role("button", name="Make maintenance account").click()
+    expect(toasts(pg)).to_contain_text("Prairie Ridge Builders LLC is a maintenance account.")
+    pg.unroute(lists)
+    toasts(pg).get_by_role("button", name="Undo").click()
+    expect(toasts(pg)).to_contain_text("Put back: Prairie Ridge Builders LLC is on the BD tab again.")
+    expect(accounts(pg)).to_have_count(8)
+
+
 def test_cancel_changes_nothing(page_as, expect):
     p, pg = page_as("/bd/contacts.html", EMERY)
     acct(pg, 16).locator("[data-more]").click()
@@ -322,6 +382,57 @@ def test_a_manager_moves_a_company_back_to_bd(page_as, expect):
     expect(pg.locator("#ct-tab-bd")).to_have_text(re.compile(r"BD accounts\s*9"))
 
 
+def test_move_back_to_bd_says_which_follow_up_came_off_and_undo_puts_it_back(page_as, expect):
+    """Q3 both ways. Kaw Valley Cold Storage back to BD: Hal's open maintenance follow-up 301 on Avery's
+    list comes off (snoozed), and the toast calls it a maintenance follow-up, not a BD call. Undo puts
+    the company on the Maintenance tab again, Nora's "Due now" and Hal's follow-up with it."""
+    _, pg = page_as("/bd/contacts.html?tab=maintenance", DEVON)
+    acct(pg, 17).locator("[data-more]").click()
+    pg.locator('.menu [data-act="to-bd"]').click()
+    pg.locator(".dialog.is-open").get_by_role("button", name="Move back to BD").click()
+    expect(toasts(pg)).to_contain_text(
+        "Kaw Valley Cold Storage is back on the BD tab. 1 maintenance follow-up came off this week's list.")
+    week = api(pg, "/api/bd/week?owner=1")["week"]
+    assert [t["status"] for t in week["tasks"] if t["id"] == 301] == ["snoozed"]
+    toasts(pg).get_by_role("button", name="Undo").click()
+    expect(toasts(pg)).to_contain_text("Put back: Kaw Valley Cold Storage is on the Maintenance tab again.")
+    expect(pg.locator("#ct-tab-maintenance")).to_have_attribute("aria-selected", "true")
+    expect(accounts(pg)).to_have_count(1)
+    expect(acct(pg, 17).locator(".ct-flags")).to_contain_text("Due now")
+    expect(pg.locator("#ct-tab-bd")).to_have_text(re.compile(r"BD accounts\s*8"))
+    week = api(pg, "/api/bd/week?owner=1")["week"]
+    assert [t["status"] for t in week["tasks"] if t["id"] == 301] == ["open"]
+
+
+def test_the_whole_move_works_from_the_keyboard(page_as, expect):
+    """Tab to the row's "..." button, Enter opens the menu on its item, Enter asks, Escape cancels and
+    puts focus back on the row's button; then Space, Enter and Enter make the move."""
+    p, pg = page_as("/bd/contacts.html", EMERY)
+    more = acct(pg, 14).locator("[data-more]")
+    acct(pg, 14).locator(".ct-acct-toggle").focus()
+    pg.keyboard.press("Tab")
+    expect(more).to_be_focused()
+    pg.keyboard.press("Enter")
+    expect(pg.locator('.menu [data-act="to-maintenance"]')).to_be_focused()
+    pg.keyboard.press("Enter")
+    dlg = pg.locator(".dialog.is-open")
+    expect(dlg.locator(".dialog-title")).to_have_text("Make Cedar Creek Concrete a maintenance account?")
+    expect(dlg.locator(".dialog-text")).to_have_text("1 person moves to the Maintenance tab.")
+    pg.keyboard.press("Escape")
+    expect(pg.locator(".dialog.is-open")).to_have_count(0)
+    expect(more).to_be_focused()
+    assert not [r for r in p.requests if r.startswith("POST ")]
+    pg.keyboard.press(" ")
+    expect(pg.locator('.menu [data-act="to-maintenance"]')).to_be_focused()
+    pg.keyboard.press("Enter")
+    expect(pg.locator(".dialog.is-open .dialog-title")).to_have_text("Make Cedar Creek Concrete a maintenance account?")
+    pg.locator(".dialog.is-open").get_by_role("button", name="Make maintenance account").focus()
+    pg.keyboard.press("Enter")
+    expect(toasts(pg)).to_contain_text("Cedar Creek Concrete is a maintenance account.")
+    expect(pg.locator("#ct-tab-maintenance")).to_have_text(re.compile(r"Maintenance\s*2"))
+    expect(acct(pg, 14)).to_have_count(0)
+
+
 def test_the_assistant_has_no_menu_and_a_right_click_is_the_browsers(page_as, expect):
     """Q5: never the assistant. No "..." on any row, and a right-click opens no BD menu."""
     _, pg = page_as("/bd/contacts.html", CASEY)
@@ -329,6 +440,23 @@ def test_the_assistant_has_no_menu_and_a_right_click_is_the_browsers(page_as, ex
     acct(pg, 10).locator(".ct-acct-name").click(button="right")
     pg.wait_for_timeout(200)
     assert pg.locator(".menu").count() == 0
+
+
+@pytest.mark.parametrize("viewport", [DESKTOP, PHONE], ids=["1280", "390"])
+def test_the_assistant_who_opens_bd_lands_on_contacts_her_bd_home(page_as, expect, viewport):
+    """Her BD home (spec #802, role home): /bd/ sends her to Contacts, which is the lit section, and her
+    sidebar is BD's rail for her: Contacts, Add contact, Potential BD Contacts (no This Week, no Admin;
+    she reaches Admin's unknown calls from the Attach links on Contacts)."""
+    p, pg = page_as("/bd/", CASEY, viewport)
+    assert re.search(r"/bd/contacts\.html(\?[^#]*)?$", pg.url), pg.url
+    expect(pg.locator("main h1")).to_have_text("Contacts")
+    expect(accounts(pg)).to_have_count(8)
+    pg.locator("#tw-bd-sections a").first.wait_for(state="attached", timeout=15000)
+    hrefs = pg.locator("#tw-bd-sections a").evaluate_all("els => els.map(e => e.getAttribute('href'))")
+    assert hrefs == ["/bd/contacts.html", "/bd/add.html", "/bd/review.html"], hrefs
+    expect(pg.locator('#tw-bd-sections a[aria-current="page"]')).to_have_attribute("href", "/bd/contacts.html")
+    # the redirect can land while /bd/ is still loading; the browser then cancels the rest of that load
+    p.errors[:] = [e for e in p.errors if e != "failed /bd/"]
 
 
 # ── the import and the unknown calls, back on Contacts as BD had them ─────────────────────────────

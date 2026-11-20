@@ -369,7 +369,7 @@
       '<span class="ct-chev">' + ico("chev-right", 18) + "</span></button>" +
       (S.can.move_company === true
         ? '<button type="button" class="btn btn-icon btn-sm ct-more" id="ct-m-' + tab + "-" + esc(a.id) + '" data-more aria-label="More for ' +
-          esc(a.name) + '" aria-haspopup="menu" aria-expanded="false">' + ico("more", 18) + "</button>"
+          esc(a.name) + '" aria-haspopup="menu" aria-expanded="false">' + ico("more", 20) + "</button>"
         : '<span class="ct-more-gap" aria-hidden="true"></span>') +
       "</div>";
     if (open) {
@@ -459,7 +459,8 @@
     BD.announce((w.first ? w.first + " " : "") + w.more);
   }
 
-  function search(q) {
+  /** quiet: asked again after a move or an import, whose toast says what happened (no second announcement). */
+  function search(q, quiet) {
     S.q = q;
     S.seq += 1;
     var seq = S.seq;
@@ -483,7 +484,7 @@
       TABS.forEach(function (t) { Object.keys(hits[t]).forEach(function (id) { S.open[key(t, id)] = true; }); });
       syncUrl();
       render();
-      announceSearch();
+      if (!quiet) announceSearch();
     }, function (e) {
       if (seq !== S.seq) return;
       S.hits = null;
@@ -520,8 +521,10 @@
       : { act: "to-bd", label: "Move back to BD", icon: "arrow-left" }]);
   }
 
+  /** Both tabs again, after a move, its Undo or an import; a search on show is asked again too, so its
+   *  hits follow a company to the tab it is on now. */
   function reload() {
-    return loadLists().then(render);
+    return loadLists().then(function () { return S.q ? search(S.q, true) : render(); });
   }
 
   function move(btn) {
@@ -535,13 +538,19 @@
       BD.setBusy(btn, true);
       Api.post(Api.path("contacts", "accounts", a.id, "move"), { to: w.to }).then(function (r) {
         var m = r.move || {};
+        // What came off: open BD calls going to maintenance; the pinned maintenance follow-up coming back.
+        var off = w.to === "maintenance" ? plural(m.calls_off, "call") : plural(m.calls_off, "maintenance follow-up");
+        var words = (w.to === "maintenance" ? a.name + " is a maintenance account." : a.name + " is back on the BD tab.") +
+          (m.calls_off ? " " + off + " came off this week's list." : "") +
+          (m.pinned ? " " + plural(m.pinned, "follow-up") + " pinned to this week." : "");
+        var toastIt = function () {
+          BD.toast(words, { kind: "ok", ms: UNDO_MS, action: { label: "Undo", onClick: function () { undo(m, a); } } });
+        };
+        // The move is made: its Undo is offered even when the list then fails to reload.
         return reload().then(function () {
           focusId("ct-tab-" + S.tab);
-          var words = (w.to === "maintenance" ? a.name + " is a maintenance account." : a.name + " is back on the BD tab.") +
-            (m.calls_off ? " " + plural(m.calls_off, "call") + " came off this week's list." : "") +
-            (m.pinned ? " " + plural(m.pinned, "follow-up") + " pinned to this week." : "");
-          BD.toast(words, { kind: "ok", ms: UNDO_MS, action: { label: "Undo", onClick: function () { undo(m, a); } } });
-        });
+          toastIt();
+        }, toastIt);
       }, function (e) {
         BD.setBusy(btn, false);
         BD.toast(errText(e), { kind: "error" });
@@ -551,10 +560,13 @@
 
   function undo(m, a) {
     Api.post(Api.path("contacts", "accounts", "moves", m.id, "undo"), {}).then(function () {
+      var said = function () {
+        BD.toast("Put back: " + a.name + " is on the " + TAB_NAME[m.to === "maintenance" ? "bd" : "maintenance"] + " tab again.", { kind: "ok" });
+      };
       return reload().then(function () {
         focusId("ct-tab-" + S.tab);
-        BD.toast("Put back: " + a.name + " is on the " + TAB_NAME[m.to === "maintenance" ? "bd" : "maintenance"] + " tab again.", { kind: "ok" });
-      });
+        said();
+      }, said);
     }, function (e) {
       BD.toast(errText(e), { kind: "error" });
     });

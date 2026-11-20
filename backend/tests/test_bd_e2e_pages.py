@@ -9,7 +9,9 @@ Emery Stoll admin, Frankie Oduya super admin) at 1280 and 390 wide, and must
   * raise no JavaScript error, no console error and no failed same-origin request (an answer of 400 or
     more is not a failed request: Potential BD Contacts and Analytics show the server's 503 "not built
     yet", and a page a role may not use says so);
-  * on a phone, never scroll sideways.
+  * on a phone, never scroll sideways;
+  * link to no BD page that is not there (spec #802, page links: MOVED_PAGES, every BD page since
+    Contacts moved), and link to Contacts from the sidebar, which every BD role has.
 A role a page refuses is fine: it must refuse with words on a page, not a crash. The assistant who opens
 This Week lands on Contacts, her BD home. BD's login page is not here: the tool's sign-in replaced it
 (tests/test_bd_pages_off.py and test_sign_in_return.py have its redirect).
@@ -25,7 +27,7 @@ import re
 
 import pytest
 
-from _bd_browser import DESKTOP, PHONE, Page, browser, live_app_db, sideways
+from _bd_browser import DESKTOP, MOVED_PAGES, PHONE, Page, bd_links, browser, live_app_db, sideways
 
 ROLES = {"salesperson": "avery.quill@example.com", "assistant": "casey.moret@example.com",
          "manager": "devon.hale@example.com", "admin": "emery.stoll@example.com",
@@ -68,6 +70,10 @@ def test_page_loads_cleanly(env, path, role, viewport):
         assert pg.locator("#main").inner_text().strip(), "a blank page"
         refused = [x for x in p.bd_errors() if x[0] not in (403, 503)]
         assert refused == [], "only a refusal or a not-built-yet answer: %r" % refused
+        pg.locator("#tw-bd-sections a").first.wait_for(state="attached", timeout=15000)
+        seen = set(bd_links(pg))
+        assert seen <= MOVED_PAGES, sorted(seen - MOVED_PAGES)
+        assert "/bd/contacts.html" in seen, "Contacts is in every BD role's sidebar"
         if viewport is PHONE:
             over = sideways(pg)
             assert over <= 1, "scrolls sideways by %dpx at 390 wide" % over
