@@ -106,14 +106,23 @@ def _new_name() -> str:
 
 
 @contextlib.contextmanager
-def new_database(admin: str):
-    """An empty database of its own, dropped afterwards. Yields its (admin) URL."""
+def new_database(admin: str, template: str | None = None, options: str = ""):
+    """An empty database of its own, dropped afterwards. Yields its (admin) URL. `template` copies
+    that database (which must have no open connection); `options` is spliced into CREATE DATABASE
+    as written (callers pass fixed SQL, never a value from outside)."""
     import psycopg
 
     name = _new_name()
+    ddl = "create database " + name
+    if template is not None:
+        if not template.replace("_", "").isalnum():
+            raise ValueError("a template database name is [A-Za-z0-9_] only")
+        ddl += " template " + template
+    if options:
+        ddl += " " + options
     try:
         with connect(admin) as conn:
-            conn.execute("create database " + name)
+            conn.execute(ddl)
     except psycopg.OperationalError as exc:
         if running_in_ci():
             raise

@@ -9,6 +9,9 @@
                           byte-wise as BD's alpine Postgres does) and one tool database (migrated by
                           the runner, the bd_app-like login ready, sorting text the ICU en-US way)
     clone(admin, tpl)     a fresh database copied from a template, dropped afterwards
+    templates, dbs        the cut-over tests' fixtures (a module's two templates; a test's two clones,
+                          the bd_app-like login's url and two record paths), with the plain readings
+                          they share: scalar, columns_of, rows, bd_counts, refused_lines
 
 ROWS is made up and covers every table the old app has, with the awkward values on purpose: nulls
 next to empty strings, odd text (quotes, a backslash, a tab, a newline, an emoji, accents, the word
@@ -40,6 +43,9 @@ from __future__ import annotations
 
 import contextlib
 import pathlib
+import types
+
+import pytest
 
 import _bd_db
 
@@ -347,34 +353,18 @@ def databases(admin: str):
         yield {"old": _bd_db.dbname(old), "tool": _bd_db.dbname(tool)}
 
 
-@contextlib.contextmanager
 def _icu_database(admin: str):
     """An empty database whose default collation is ICU's en-US, where "quo" sorts before "Quo" and
     "Weekly" after "lead_sources" (prod's Supabase sorts like that). The old database sorts
     byte-wise, as BD's alpine Postgres does, so every test copies between two different orders."""
-    name = _bd_db._new_name()
-    with _bd_db.connect(admin) as conn:
-        conn.execute("create database %s template template0 locale_provider icu icu_locale 'en-US'"
-                     " locale 'C'" % name)
-    try:
-        yield _bd_db.url_for(admin, name)
-    finally:
-        with _bd_db.connect(admin) as conn:
-            conn.execute("drop database if exists " + name + " with (force)")
+    return _bd_db.new_database(admin, template="template0",
+                               options="locale_provider icu icu_locale 'en-US' locale 'C'")
 
 
-@contextlib.contextmanager
 def clone(admin: str, template: str):
     """A fresh database copied from `template` (which must have no open connection), dropped after.
     Yields its admin url."""
-    name = _bd_db._new_name()
-    with _bd_db.connect(admin) as conn:
-        conn.execute("create database %s template %s" % (name, template))   # both [a-z0-9_] only
-    try:
-        yield _bd_db.url_for(admin, name)
-    finally:
-        with _bd_db.connect(admin) as conn:
-            conn.execute("drop database if exists " + name + " with (force)")
+    return _bd_db.new_database(admin, template=template)
 
 
 def table_rows(url: str, schema: str, table: str, columns: list, order: str) -> list:
@@ -386,3 +376,56 @@ def table_rows(url: str, schema: str, table: str, columns: list, order: str) -> 
         return [tuple(r) for r in conn.execute(sql.SQL("select {} from {} order by " + order).format(
             sql.SQL(", ").join(sql.SQL("{}::text").format(sql.Identifier(c)) for c in columns),
             sql.Identifier(schema, table))).fetchall()]
+
+
+# ── the cut-over tests' fixtures (import them by name: from _bd_old_source import dbs, templates) ──
+@pytest.fixture(scope="module")
+def templates(bd_admin):
+    with databases(bd_admin) as names:
+        yield names
+
+
+@pytest.fixture
+def dbs(bd_admin, templates, tmp_path):
+    """The test's own old database and tool database (clones of the module's templates), the
+    bd_app-like login's url on the tool database, and two record paths (a cut-over, a re-cut-over)."""
+    with clone(bd_admin, templates["old"]) as old, clone(bd_admin, templates["tool"]) as tool:
+        yield types.SimpleNamespace(old=old, tool=tool, app=_bd_db.app_login_url(tool),
+                                    record=tmp_path / "cutover-record.json",
+                                    record2=tmp_path / "recutover-record.json")
+
+
+# ── plain readings (not the command's code) ─────────────────────────────────────────────────────
+def scalar(url: str, query: str, params=None):
+    with _bd_db.connect(url) as conn:
+        return conn.execute(query, params).fetchone()[0]
+
+
+def columns_of(url: str, schema: str, table: str) -> list:
+    """The table's columns in the database's own order, from the catalog (not the command's map)."""
+    with _bd_db.connect(url) as conn:
+        return [r[0] for r in conn.execute(
+            "select a.attname from pg_attribute a join pg_class c on c.oid = a.attrelid"
+            " join pg_namespace n on n.oid = c.relnamespace where n.nspname = %s and c.relname = %s"
+            " and a.attnum > 0 and not a.attisdropped order by a.attnum", (schema, table)).fetchall()]
+
+
+ORDER = {"settings": 'key collate "C"', "schema_migrations": "name",
+         "integration_events": 'provider collate "C", event_id collate "C"'}
+
+
+def rows(url: str, schema: str, table: str, cols: list) -> list:
+    return table_rows(url, schema, table, cols, ORDER.get(table, "id"))
+
+
+def bd_counts(url: str) -> dict:
+    """{table: rows} for every table in schema bd but the ledger."""
+    with _bd_db.connect(url) as conn:
+        tables = [r[0] for r in conn.execute(
+            "select relname from pg_class where relnamespace = 'bd'::regnamespace and relkind = 'r'"
+            " and relname <> 'schema_migrations' order by 1").fetchall()]
+        return {t: conn.execute("select count(*) from bd.%s" % t).fetchone()[0] for t in tables}
+
+
+def refused_lines(err: str) -> list:
+    return [x for x in err.splitlines() if x.startswith("refusing")]

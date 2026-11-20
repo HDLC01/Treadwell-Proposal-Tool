@@ -19,45 +19,20 @@ from __future__ import annotations
 import pathlib
 import re
 import shutil
-import types
 
 import pytest
 
 import _bd_db
 import _bd_old_source as src
+from _bd_old_source import bd_counts, dbs, refused_lines, templates  # noqa: F401  (fixtures)
 from bd.ops import cutover
 
 EXIT_OK, EXIT_ERROR, EXIT_USAGE, EXIT_REFUSED, EXIT_MISMATCH, EXIT_FREEZE = 0, 1, 2, 3, 4, 5
 
 
-@pytest.fixture(scope="module")
-def templates(bd_admin):
-    with src.databases(bd_admin) as names:
-        yield names
-
-
-@pytest.fixture
-def dbs(bd_admin, templates, tmp_path):
-    with src.clone(bd_admin, templates["old"]) as old, src.clone(bd_admin, templates["tool"]) as tool:
-        yield types.SimpleNamespace(old=old, tool=tool, app=_bd_db.app_login_url(tool),
-                                    record=tmp_path / "cutover-record.json")
-
-
 def run(dbs, capsys):
     code = cutover.forward(dbs.old, dbs.app, dbs.record)
     return code, capsys.readouterr()
-
-
-def refused_lines(err):
-    return [x for x in err.splitlines() if x.startswith("refusing")]
-
-
-def bd_counts(url):
-    with _bd_db.connect(url) as conn:
-        tables = [r[0] for r in conn.execute(
-            "select relname from pg_class where relnamespace = 'bd'::regnamespace and relkind = 'r'"
-            " and relname <> 'schema_migrations' order by 1").fetchall()]
-        return {t: conn.execute("select count(*) from bd.%s" % t).fetchone()[0] for t in tables}
 
 
 def assert_nothing_written(dbs, filled=()):
@@ -120,6 +95,33 @@ def test_another_client_on_the_old_database_is_refused(dbs, capsys):
 def test_the_commands_own_session_is_not_another_client(dbs, capsys):
     code, out = run(dbs, capsys)
     assert code == EXIT_OK, out.err
+
+
+# A plain login on the old database that is neither a superuser nor in pg_read_all_stats. Test
+# servers only; this password guards nothing.
+OLD_READER, OLD_READER_PASSWORD = "bd_test_old_reader", "bd-test-old-reader-only"
+
+
+def test_an_old_login_that_cannot_see_other_sessions_is_refused(dbs, capsys):
+    """Postgres hides another role's session details from such a login, so it cannot tell whether
+    the old app is still connected. Here the admin holds a session the reader cannot see into."""
+    with _bd_db.connect(dbs.old) as conn:
+        conn.execute(
+            "do $t$ begin"
+            " if not exists (select 1 from pg_roles where rolname = '%s') then"
+            "  begin create role %s login password '%s';"
+            "  exception when duplicate_object or unique_violation then null; end;"
+            " end if; end $t$" % (OLD_READER, OLD_READER, OLD_READER_PASSWORD))
+        conn.execute("grant usage on schema public to %s" % OLD_READER)
+        conn.execute("grant select on all tables in schema public to %s" % OLD_READER)
+        conn.execute("grant select on all sequences in schema public to %s" % OLD_READER)
+    reader = _bd_db.url_for(dbs.old, _bd_db.dbname(dbs.old), user=OLD_READER, password=OLD_READER_PASSWORD)
+    with _bd_db.connect(dbs.old) as other:
+        other.execute("select 1")
+        assert cutover.check(reader, dbs.app) == EXIT_REFUSED
+    assert refused_lines(capsys.readouterr().err) == [
+        "refusing: the old login cannot see other sessions; use the old database's owner (a superuser)"
+        " or a login in pg_read_all_stats"]
 
 
 @pytest.mark.parametrize("ddl,table", [

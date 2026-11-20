@@ -33,8 +33,9 @@ and bd.schema_migrations is never written.
 
 PREFLIGHT (forward and check). It refuses, naming each problem, before anything is written:
   * the record file already exists (a cut-over record is never overwritten);
-  * any other client is connected to the old database (pg_stat_activity; this command's own session
-    is not counted);
+  * the old login cannot see other sessions (it is neither a superuser nor in pg_read_all_stats, so
+    Postgres hides the other roles' sessions from it), or any other client is connected to the old
+    database (pg_stat_activity; this command's own session is not counted);
   * the old database's ledger is not BD's original four migrations;
   * either side's tables and columns differ from MAP (a missing or extra table or column, a type, or
     a column generated on one side only), so no column can be dropped or reinterpreted unnoticed;
@@ -55,16 +56,24 @@ preflight make sure), so no column needs a declared cross-type form.
     hold, and nothing is kept.
   * The target's counts and checksums, read inside the copy's own transaction, must equal the source's.
   * Every identity sequence in schema bd is set past the highest id and past the old sequence's own
-    position (so an id the old app ever handed out is never handed out again), then compared: its next
-    value must be past the highest id.
-Any difference exits non-zero and rolls the target back.
+    position (so an id the old app ever handed out is never handed out again), and never moved back
+    from where it already was, then compared: its next value must be past the highest id.
+Any difference exits non-zero and rolls the target back. setval is not undone by a rollback, so the
+command puts back every sequence it had set itself, whatever stopped it.
+The freeze is proven up to the proof: between the source's second reading and the commit only the
+sequences, the duplicates list and the record are written, and what keeps the source still in that
+moment is the freeze itself (the old app stopped, no other client, as the preflight saw).
 
 FORWARD writes the whole target in ONE transaction, all or nothing, as bd_app: every row with its id,
 a self-reference (contacts.duplicate_of) set once every contact is in, the sequences, the proof. Only
-when the proof holds does it write the cut-over record (PATH, a new file: the source's per-table counts
-and checksums and the time, names and numbers only) and commit. Then it prints the one-time list of
-likely duplicate BD accounts for Hanz, by the very rule the Possible duplicates filter uses
-(bd/account_pairs_service.py), as account ids, names and the kind of hint. Nothing is merged.
+when the proof holds does it read the one-time list of likely duplicate BD accounts (in the same
+transaction), write the cut-over record (PATH, a new file: the source's per-table counts and checksums
+and the time, names and numbers only) and commit. Then it prints the list for Hanz, by the Likely
+duplicate accounts rule (bd/account_pairs_service.py, the pairs the Contacts page's Possible duplicates
+filter shows), as account ids, names and the kind of hint. Nothing is merged.
+When the commit fails, the record is deleted only when the server clearly refused it; when the
+connection dropped during the commit, the commit may have landed, so the record stays and the command
+exits 6 (run check: "bd.<table> holds rows" means the copy is in).
 When the old database holds a bd_carry (a rollback happened), the forward copy puts it back once the
 rows are in and before the proof, in the same transaction, and proves schema bd then holds exactly
 the marks and kept pairs it put back (see BD_CARRY).
@@ -73,7 +82,7 @@ REVERSE (a rollback, #802 Q38) copies schema bd back into the old database's tab
 database's owner. Its preflight refuses, naming each problem, before anything is written:
   * the cut-over record PATH is missing, is not a forward copy's record, or was made with another
     checksum form;
-  * any other client is connected to the old database;
+  * the old login cannot see other sessions, or any other client is connected to the old database;
   * the old database's ledger is not BD's four, or either side differs from MAP;
   * the tool login can create in schema bd, or schema bd is behind the code;
   * schema bd holds no BD rows at all (the copy would empty the old database);
@@ -106,7 +115,9 @@ name, phone, email or note, never any other row data, and never a connection str
 is reported by its class, its SQLSTATE and the table, never its message (which can quote a row).
 
 Exit codes: 0 done, 1 an error (nothing kept), 2 usage, 3 refused by the preflight, 4 the proof did not
-match, 5 the freeze did not hold (forward: the old database changed; reverse: schema bd changed).
+match, 5 the freeze did not hold (forward: the old database changed; reverse: schema bd changed),
+6 forward only: the connection dropped during the commit, so whether schema bd holds the copy is
+unknown (the record is kept; run check before anything else).
 """
 from __future__ import annotations
 
@@ -134,7 +145,7 @@ MIGRATION_SETTINGS_KEYS = ("bd_cadence",)
 CHECKSUM_FORM = "md5 of each row's md5(json_build_array(non-generated columns)::text), key order, UTC"
 RECORD_NAME = "bd cut-over"
 
-EXIT_OK, EXIT_ERROR, EXIT_USAGE, EXIT_REFUSED, EXIT_MISMATCH, EXIT_FREEZE = 0, 1, 2, 3, 4, 5
+EXIT_OK, EXIT_ERROR, EXIT_USAGE, EXIT_REFUSED, EXIT_MISMATCH, EXIT_FREEZE, EXIT_COMMIT_UNKNOWN = 0, 1, 2, 3, 4, 5, 6
 
 OLD_URL_ENV = "BD_CUTOVER_OLD_URL"
 TOOL_URL_ENV = "BD_CUTOVER_TOOL_URL"
@@ -240,14 +251,11 @@ TOOL_ONLY_TABLES: tuple = (
 # bd_carry in the OLD database (see BD_CARRY): the BD-only state a reverse copy saves for the next
 # forward copy. Its shape is checked by the forward preflight; the reverse copy makes it.
 CARRY_SCHEMA = "bd_carry"
-CARRY: tuple = (
-    Table("merge_marks", "merge_marks", (
-        ("company_id", BIGINT), ("merged_into", BIGINT), ("merged_at", TS), ("merged_by", BIGINT),
-        ("people", "bigint[]")), key=("company_id",), identity=False),
-    Table("kept_pairs", "kept_pairs", (
-        ("account_a", BIGINT), ("account_b", BIGINT), ("decided_by", BIGINT), ("decided_at", TS)),
-        key=("account_a", "account_b"), identity=False),
-)
+CARRY: dict = {      # {table: ((column, type), ...)}
+    "merge_marks": (("company_id", BIGINT), ("merged_into", BIGINT), ("merged_at", TS), ("merged_by", BIGINT),
+                    ("people", "bigint[]")),
+    "kept_pairs": (("account_a", BIGINT), ("account_b", BIGINT), ("decided_by", BIGINT), ("decided_at", TS)),
+}
 CARRY_DDL = (
     "create table bd_carry.merge_marks (company_id bigint primary key, merged_into bigint not null,"
     " merged_at timestamptz not null, merged_by bigint, people bigint[] not null)",
@@ -275,8 +283,9 @@ def _session_sql(search_path: str) -> tuple:
 
 
 def _connect(url: str, side: str, read_only: bool) -> Any:
-    """A session on one side: UTC, ISO dates, its own search_path. The old side is read only and
-    repeatable read, so the forward copy can never write there and reads one snapshot at a time."""
+    """A session on one side (side names it in errors and picks its search_path): UTC, ISO dates.
+    read_only=True makes the session read only and repeatable read, so it can never write and each
+    transaction reads one snapshot: check and forward open the old side so, reverse the tool side."""
     import psycopg
 
     try:
@@ -345,7 +354,7 @@ def _carry_problems(old: Any) -> list:
     """Each way the old database's bd_carry differs from CARRY ([] when there is none)."""
     if _rows(old, "select pg_catalog.to_regnamespace(%s) is null", (CARRY_SCHEMA,))[0][0]:
         return []
-    want = {t.old: {c: (ty, False) for c, ty in t.columns} for t in CARRY}
+    want = {name: {c: (ty, False) for c, ty in cols} for name, cols in CARRY.items()}
     have: dict = {}
     for rel, col, typ, gen in _rows(old, _CATALOG_SQL, (CARRY_SCHEMA,)):
         have.setdefault(rel, {})
@@ -380,6 +389,17 @@ def _shape_problems(want: dict, have: dict, schema: str, where: str) -> list:
 def _other_clients(old: Any) -> int:
     return _rows(old, "select count(*) from pg_catalog.pg_stat_activity where datname = current_database()"
                       " and backend_type = 'client backend' and pid <> pg_catalog.pg_backend_pid()")[0][0]
+
+
+def _old_login_problems(old: Any) -> list:
+    """Postgres hides another role's session details (backend_type among them) from a login that is
+    neither a superuser nor in pg_read_all_stats, so such a login cannot count the other clients."""
+    sees = _rows(old, "select r.rolsuper or pg_catalog.pg_has_role(current_user, 'pg_read_all_stats', 'USAGE')"
+                      " from pg_catalog.pg_roles r where r.rolname = current_user")[0][0]
+    if sees:
+        return []
+    return ["refusing: the old login cannot see other sessions; use the old database's owner (a superuser)"
+            " or a login in pg_read_all_stats"]
 
 
 def _old_ledger_problems(old: Any) -> list:
@@ -438,11 +458,11 @@ def preflight_forward(old: Any, tool: Any, record: pathlib.Path | None) -> list:
     return _preflight(old, tool, record)[0]
 
 
-def _preflight(old: Any, tool: Any, record: pathlib.Path | None) -> tuple:
-    """(problems, whether the old database's tables are the map's)."""
-    problems = []
-    if record is not None and record.exists():
-        problems.append("refusing: the cut-over record %s already exists (it is never overwritten)" % record.name)
+def _shared_preflight(old: Any, tool: Any) -> tuple:
+    """The checks both directions run: (problems, whether the old database's tables are the map's,
+    whether schema bd's are, how many other clients the old database has). Leaves the old session's
+    transaction open (the reverse copy locks in it); ends the tool session's."""
+    problems = _old_login_problems(old)
     others = _other_clients(old)
     if others:
         problems.append("refusing: %d other client%s connected to the old database" % (
@@ -450,18 +470,30 @@ def _preflight(old: Any, tool: Any, record: pathlib.Path | None) -> tuple:
     problems += _old_ledger_problems(old)
     old_schema = schema_problems(old, "old")
     problems += old_schema
-    problems += _carry_problems(old)
-    old.commit()
     login, has_schema = _tool_login_problems(tool)
     problems += login
+    tool_ok = False
     if has_schema:
         problems += _tool_ledger_problems(tool)
         tool_schema = schema_problems(tool, "tool")
         problems += tool_schema
-        if not tool_schema:
-            problems += ["refusing: bd.%s holds rows" % t for t in _filled_tables(tool)]
+        tool_ok = not tool_schema
     tool.commit()
-    return problems, not old_schema
+    return problems, not old_schema, tool_ok, others
+
+
+def _preflight(old: Any, tool: Any, record: pathlib.Path | None) -> tuple:
+    """(problems, whether the old database's tables are the map's)."""
+    problems = []
+    if record is not None and record.exists():
+        problems.append("refusing: the cut-over record %s already exists (it is never overwritten)" % record.name)
+    shared, old_ok, tool_ok, _others = _shared_preflight(old, tool)
+    problems += shared + _carry_problems(old)
+    old.commit()
+    if tool_ok:
+        problems += ["refusing: bd.%s holds rows" % t for t in _filled_tables(tool)]
+        tool.commit()
+    return problems, old_ok
 
 
 # ── the reverse preflight ───────────────────────────────────────────────────────────────────────
@@ -503,23 +535,12 @@ def _preflight_reverse(old: Any, tool: Any, record: pathlib.Path) -> list:
     """Every reason the reverse copy must not start, as plain lines. On [] the old database's tables
     are locked in the old session's open transaction, which the copy then uses."""
     recorded, problems = read_record(record)
-    others = _other_clients(old)
-    if others:
-        problems.append("refusing: %d other client%s connected to the old database" % (
-            others, " is" if others == 1 else "s are"))
-    problems += _old_ledger_problems(old)
-    old_schema = schema_problems(old, "old")
-    problems += old_schema
-    login, has_schema = _tool_login_problems(tool)
-    problems += login
-    if has_schema:
-        problems += _tool_ledger_problems(tool)
-        tool_schema = schema_problems(tool, "tool")
-        problems += tool_schema
-        if not tool_schema and not [t for t in _filled_tables(tool) if t in {m.tool for m in MAP}]:
-            problems.append("refusing: schema bd holds no BD rows, so a reverse copy would empty the old database")
+    shared, old_ok, tool_ok, others = _shared_preflight(old, tool)
+    problems += shared
+    if tool_ok and not [t for t in _filled_tables(tool) if t in {m.tool for m in MAP}]:
+        problems.append("refusing: schema bd holds no BD rows, so a reverse copy would empty the old database")
     tool.commit()
-    if recorded is not None and not old_schema:
+    if recorded is not None and old_ok:
         if not others:
             _lock_old_tables(old)
         now = proof(old, "old")
@@ -589,10 +610,9 @@ def sequence_state(conn: Any, side: str) -> dict:
     return out
 
 
-def sequence_problems(conn: Any, side: str = "bd") -> list:
+def sequence_problems(conn: Any, side: str = "tool") -> list:
     """Each identity sequence whose next value is not past its table's highest id, as plain lines
-    ("tasks: ..."). side is "bd" (schema bd) or "old"."""
-    side = "old" if side == "old" else "tool"
+    ("tasks: ..."). side is "tool" (schema bd) or "old"."""
     return ["%s: the next id %d is not past the highest id %d" % (name, nxt, high)
             for name, (high, _used, nxt) in sequence_state(conn, side).items() if nxt <= high]
 
@@ -657,24 +677,24 @@ def _setval(tool: Any, seq: Any, value: int, called: bool) -> None:
         sql.Literal(seq.as_string(tool))), (value, called))
 
 
-def _set_sequences(conn: Any, side: str, other_seqs: dict) -> list:
+def _set_sequences(conn: Any, side: str, other_seqs: dict, done: list) -> None:
     """Every identity sequence on the target side past its highest id and past the source sequence's
-    position (other_seqs, from sequence_state of the other side). setval is not undone by a rollback,
-    so this runs only once the rows are proven, and returns what the sequences held before
-    ([(sequence, last_value, is_called)]) for _restore_sequences."""
+    position (other_seqs, from sequence_state of the other side), and never back from where it is.
+    setval is not undone by a rollback, so this runs only once the rows are proven, and appends what
+    each sequence held before ((sequence, last_value, is_called)) to `done` as soon as it is set: a
+    failure partway leaves `done` naming exactly the ones to put back (_undo)."""
     from psycopg import sql
 
     schema = OLD_SCHEMA if side == "old" else TOOL_SCHEMA
-    before = []
     for t in MAP:
         if not t.identity:
             continue
         seq = _sequence(conn, schema, _name(t, side))
-        before.append((seq,) + tuple(_rows(conn, sql.SQL("select last_value, is_called from {}").format(seq))[0]))
+        last, called = _rows(conn, sql.SQL("select last_value, is_called from {}").format(seq))[0]
         high = _rows(conn, sql.SQL("select coalesce(max(id), 0) from {}").format(_ident(schema, _name(t, side))))[0][0]
-        upto = max(high, other_seqs[t.old][1])
+        upto = max(high, other_seqs[t.old][1], last if called else last - 1)
         _setval(conn, seq, max(upto, 1), upto >= 1)
-    return before
+        done.append((seq, last, called))
 
 
 def _restore_sequences(conn: Any, before: list) -> None:
@@ -682,6 +702,19 @@ def _restore_sequences(conn: Any, before: list) -> None:
     for seq, last, called in before:
         _setval(conn, seq, last, called)
     conn.commit()
+
+
+def _undo(conn: Any, seqs_set: list) -> None:
+    """Roll the target back and put back every sequence this run set. Best effort: on a connection
+    that is gone, the sequences it set stay ahead, which leaves a gap in ids, never a reused one."""
+    import psycopg
+
+    try:
+        conn.rollback()
+        if seqs_set:
+            _restore_sequences(conn, seqs_set)
+    except psycopg.Error:
+        pass
 
 
 # ── bd_carry ────────────────────────────────────────────────────────────────────────────────────
@@ -825,7 +858,8 @@ def _hint(phones: Any, domains: Any) -> str:
 
 
 def duplicates(tool: Any) -> list:
-    """The one-time list: [(a id, a name, b id, b name, hint kind)] by the Possible duplicates rule."""
+    """The one-time list: [(a id, a name, b id, b name, hint kind)] by the Likely duplicate accounts
+    rule. Reads in the session's open transaction (the forward copy's, before its commit)."""
     from psycopg.rows import dict_row
 
     from .. import account_pairs_service as pairs
@@ -836,7 +870,6 @@ def duplicates(tool: Any) -> list:
         hints = pairs.hints(tool, sorted({p[1]["id"] for p in found} | {p[2]["id"] for p in found}))
         listed = [(a["id"], a["name"], b["id"], b["name"], _hint(*pairs.shared(hints, a["id"], b["id"])))
                   for _key, a, b in found]
-        tool.commit()
     finally:
         tool.row_factory = previous
     return listed
@@ -844,7 +877,7 @@ def duplicates(tool: Any) -> list:
 
 def _print_duplicates(listed: list, out: Any) -> None:
     print("", file=out)
-    print("Likely duplicate BD accounts (the Possible duplicates rule), for Hanz to approve:", file=out)
+    print("Likely duplicate BD accounts, for Hanz to approve (merge or keep separate in the BD CRM):", file=out)
     for row in listed:
         print("  %d %s  +  %d %s  (hint: %s)" % row, file=out)
     print("%d likely pair%s. Nothing was merged." % (len(listed), "" if len(listed) == 1 else "s"), file=out)
@@ -879,6 +912,7 @@ def _forward(old_url: str, tool_url: str, record: pathlib.Path, out: Any, err: A
     import psycopg
 
     old = tool = None
+    seqs_set: list = []
     try:
         old = _connect(old_url, "old", read_only=True)
         tool = _connect(tool_url, "tool", read_only=False)
@@ -908,28 +942,27 @@ def _forward(old_url: str, tool_url: str, record: pathlib.Path, out: Any, err: A
             if applied is not None and _tool_marks_and_kept(tool) != (applied["marks"], applied["kept"]):
                 mismatched.append(CARRY_SCHEMA)
             seq_problems: list = []
-            seqs_before: list = []
+            listed: list = []
             if not changed and not mismatched:
                 step = "setting the sequences"
-                seqs_before = _set_sequences(tool, "tool", old_seqs)
-                seq_problems = sequence_problems(tool, "bd")
-                if seq_problems:
-                    tool.rollback()
-                    _restore_sequences(tool, seqs_before)
-        except psycopg.Error as exc:
-            tool.rollback()
-            raise _db_error(exc, step) from None
-        except CutoverError:
-            tool.rollback()
+                _set_sequences(tool, "tool", old_seqs, seqs_set)
+                seq_problems = sequence_problems(tool, "tool")
+                if not seq_problems:
+                    step = "the duplicates list"
+                    listed = duplicates(tool)
+        except Exception as exc:  # noqa: BLE001  (whatever stopped it, the sequences it set go back)
+            _undo(tool, seqs_set)
+            if isinstance(exc, psycopg.Error):
+                raise _db_error(exc, step) from None
             raise
         if changed:
-            tool.rollback()
+            _undo(tool, seqs_set)
             print("freeze broken: the old database changed during the copy, so nothing was kept in schema bd.",
                   file=err)
             _print_changed(changed, before, after, err)
             return EXIT_FREEZE
         if mismatched or seq_problems:
-            tool.rollback()
+            _undo(tool, seqs_set)
             print("proof failed, so nothing was kept in schema bd:", file=err)
             _print_mismatched(mismatched, before, target, "schema bd", err)
             for line in seq_problems:
@@ -941,18 +974,21 @@ def _forward(old_url: str, tool_url: str, record: pathlib.Path, out: Any, err: A
                 json.dump(_record(before), fh, indent=2)
                 fh.write("\n")
         except OSError as exc:
-            tool.rollback()
+            _undo(tool, seqs_set)
             raise CutoverError("the cut-over record could not be written (%s), so nothing was kept"
                                % exc.__class__.__name__) from None
         try:
             tool.commit()
         except psycopg.Error as exc:
-            record.unlink(missing_ok=True)
-            try:
-                tool.rollback()
-                _restore_sequences(tool, seqs_before)
-            except psycopg.Error:
-                pass
+            if isinstance(exc, psycopg.OperationalError) or tool.closed:
+                # The connection dropped during the COMMIT: the server may have taken it. The record
+                # stays, because without it a copy that did land could never be rolled back.
+                print("error: the commit's outcome is unknown (%s): schema bd may hold the copy, so the "
+                      "cut-over record %s is kept; run check before anything else" % (
+                          exc.__class__.__name__, record.name), file=err)
+                return EXIT_COMMIT_UNKNOWN
+            record.unlink(missing_ok=True)      # the server refused the commit: nothing was kept
+            _undo(tool, seqs_set)
             raise _db_error(exc, "committing schema bd") from None
         print("Forward copy: the old BD database -> schema bd. Every table matches.", file=out)
         _print_proof(before, target, out)
@@ -963,10 +999,6 @@ def _forward(old_url: str, tool_url: str, record: pathlib.Path, out: Any, err: A
             print("bd_carry re-applied: %s, %s." % (_plural(len(applied["marks"]), "merge mark"),
                                                      _plural(len(applied["kept"]), "kept pair")), file=out)
             _print_carry_left(applied, out)
-        try:
-            listed = duplicates(tool)
-        except psycopg.Error as exc:
-            raise _db_error(exc, "the duplicates list (the copy itself is in and proven)") from None
         _print_duplicates(listed, out)
         return EXIT_OK
     finally:
@@ -1014,6 +1046,7 @@ def _reverse(old_url: str, tool_url: str, record: pathlib.Path, out: Any, err: A
     import psycopg
 
     old = tool = None
+    seqs_set: list = []
     try:
         old = _connect(old_url, "old", read_only=False)
         tool = _connect(tool_url, "tool", read_only=True)
@@ -1044,25 +1077,23 @@ def _reverse(old_url: str, tool_url: str, record: pathlib.Path, out: Any, err: A
             if _saved_carry(old) != carry:
                 mismatched.append(CARRY_SCHEMA)
             seq_problems: list = []
-            seqs_before: list = []
             if not changed and not mismatched:
                 step = "setting the sequences"
-                seqs_before = _set_sequences(old, "old", tool_seqs)
+                _set_sequences(old, "old", tool_seqs, seqs_set)
                 seq_problems = sequence_problems(old, "old")
-                if seq_problems:
-                    old.rollback()
-                    _restore_sequences(old, seqs_before)
-        except psycopg.Error as exc:
-            old.rollback()
-            raise _db_error(exc, step) from None
+        except Exception as exc:  # noqa: BLE001  (whatever stopped it, the sequences it set go back)
+            _undo(old, seqs_set)
+            if isinstance(exc, psycopg.Error):
+                raise _db_error(exc, step) from None
+            raise
         if changed:
-            old.rollback()
+            _undo(old, seqs_set)
             print("freeze broken: schema bd changed during the reverse copy, so nothing was kept in the old "
                   "database.", file=err)
             _print_changed(changed, before, after, err)
             return EXIT_FREEZE
         if mismatched or seq_problems:
-            old.rollback()
+            _undo(old, seqs_set)
             print("proof failed, so nothing was kept in the old database:", file=err)
             _print_mismatched(mismatched, before, target, "the old database", err)
             for line in seq_problems:
@@ -1072,11 +1103,7 @@ def _reverse(old_url: str, tool_url: str, record: pathlib.Path, out: Any, err: A
         try:
             old.commit()
         except psycopg.Error as exc:
-            try:
-                old.rollback()
-                _restore_sequences(old, seqs_before)
-            except psycopg.Error:
-                pass
+            _undo(old, seqs_set)
             raise _db_error(exc, "committing the old database") from None
         marks, kept = carry
         print("Reverse copy: schema bd -> the old BD database. Every table matches on the old app's columns.",
@@ -1166,9 +1193,6 @@ def main(argv: Any = None) -> int:
         if args.command == "reverse":
             return reverse(urls[OLD_URL_ENV], urls[TOOL_URL_ENV], args.record)
         return check(urls[OLD_URL_ENV], urls[TOOL_URL_ENV])
-    except CutoverError as exc:
-        print("error: %s" % exc, file=sys.stderr)
-        return EXIT_ERROR
     except Exception as exc:  # noqa: BLE001  (its message could quote a row or a URL: the class only)
         print("error: %s; no details are printed because they can hold row data" % exc.__class__.__name__,
               file=sys.stderr)

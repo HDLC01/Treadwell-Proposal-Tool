@@ -26,12 +26,12 @@ from __future__ import annotations
 
 import json
 import time
-import types
 
 import pytest
 
 import _bd_db
 import _bd_old_source as src
+from _bd_old_source import columns_of, dbs, refused_lines, rows, scalar, templates  # noqa: F401  (fixtures)
 from bd.ops import cutover
 
 EXIT_OK, EXIT_ERROR, EXIT_REFUSED, EXIT_MISMATCH, EXIT_FREEZE = 0, 1, 3, 4, 5
@@ -49,20 +49,6 @@ NEW_PEOPLE = [
      "email": "fennimore@brackenfold.example.com", "phone": "816-555-0162", "notes": "Wants a ZQ quote."},
 ]
 NEW_PERSONAL = sorted({p[k] for p in NEW_PEOPLE for k in ("name", "email", "phone")})
-
-
-@pytest.fixture(scope="module")
-def templates(bd_admin):
-    with src.databases(bd_admin) as names:
-        yield names
-
-
-@pytest.fixture
-def dbs(bd_admin, templates, tmp_path):
-    with src.clone(bd_admin, templates["old"]) as old, src.clone(bd_admin, templates["tool"]) as tool:
-        yield types.SimpleNamespace(old=old, tool=tool, app=_bd_db.app_login_url(tool),
-                                    record=tmp_path / "cutover-record.json",
-                                    record2=tmp_path / "recutover-record.json")
 
 
 @pytest.fixture
@@ -111,27 +97,6 @@ def tool_changes(api):
 
 
 # ── plain readings (not the command's code) ─────────────────────────────────────────────────────
-def scalar(url, query, params=None):
-    with _bd_db.connect(url) as conn:
-        return conn.execute(query, params).fetchone()[0]
-
-
-def columns_of(url, schema, table):
-    with _bd_db.connect(url) as conn:
-        return [r[0] for r in conn.execute(
-            "select a.attname from pg_attribute a join pg_class c on c.oid = a.attrelid"
-            " join pg_namespace n on n.oid = c.relnamespace where n.nspname = %s and c.relname = %s"
-            " and a.attnum > 0 and not a.attisdropped order by a.attnum", (schema, table)).fetchall()]
-
-
-ORDER = {"settings": 'key collate "C"', "schema_migrations": "name",
-         "integration_events": 'provider collate "C", event_id collate "C"'}
-
-
-def rows(url, schema, table, cols):
-    return src.table_rows(url, schema, table, cols, ORDER.get(table, "id"))
-
-
 def old_everything(url):
     """Every row of every table the old app has, its ledger, its sequences, and whether bd_carry exists."""
     out = {t: rows(url, "public", t, columns_of(url, "public", t)) for t in OLD_TABLES + ["schema_migrations"]}
@@ -199,10 +164,6 @@ def forward(dbs, record):
 
 def reverse(dbs, **kw):
     return cutover.reverse(dbs.old, dbs.app, dbs.record, **kw)
-
-
-def refused_lines(err):
-    return [x for x in err.splitlines() if x.startswith("refusing")]
 
 
 # ── the round trip ──────────────────────────────────────────────────────────────────────────────
@@ -575,6 +536,21 @@ def test_a_row_the_old_database_rejects_leaves_it_as_it_was(dbs, api, capsys):
     out = capsys.readouterr()
     assert "public.contacts" in out.err
     assert "Fennimore" not in out.out + out.err and "zz_no_fennimore" not in out.out + out.err
+    assert old_everything(dbs.old) == old_before
+
+
+def test_a_sequence_that_cannot_be_found_puts_back_the_ones_set_before_it(dbs, api, capsys):
+    """public.imports lost its identity in the old database (an odd hand change the map does not
+    see), so the reverse copy fails on the last sequence, after the other eleven were set. setval is
+    not undone by a rollback: the command puts those back itself, and the old database is as it was."""
+    assert forward(dbs, dbs.record) == EXIT_OK
+    tool_changes(api)
+    with _bd_db.connect(dbs.old) as conn:
+        conn.execute("alter table public.imports alter column id drop identity")
+    old_before = old_everything(dbs.old)
+    capsys.readouterr()
+    assert reverse(dbs) == EXIT_ERROR
+    assert "the id sequence of public.imports could not be found" in capsys.readouterr().err
     assert old_everything(dbs.old) == old_before
 
 

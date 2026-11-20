@@ -17,62 +17,30 @@ import json
 import subprocess
 import sys
 import time
-import types
 
 import pytest
 
 import _bd_db
 import _bd_old_source as src
+from _bd_old_source import bd_counts, columns_of, dbs, rows, scalar, templates  # noqa: F401  (fixtures)
 from bd.ops import cutover
 
-EXIT_OK, EXIT_REFUSED, EXIT_MISMATCH, EXIT_FREEZE = 0, 3, 4, 5
+EXIT_OK, EXIT_ERROR, EXIT_REFUSED, EXIT_MISMATCH, EXIT_FREEZE, EXIT_COMMIT_UNKNOWN = 0, 1, 3, 4, 5, 6
 OLD_TABLES = list(src.ROWS)        # the old app's 15 tables, parents first
-
-
-@pytest.fixture(scope="module")
-def templates(bd_admin):
-    with src.databases(bd_admin) as names:
-        yield names
-
-
-@pytest.fixture
-def dbs(bd_admin, templates, tmp_path):
-    with src.clone(bd_admin, templates["old"]) as old, src.clone(bd_admin, templates["tool"]) as tool:
-        yield types.SimpleNamespace(old=old, tool=tool, app=_bd_db.app_login_url(tool),
-                                    record=tmp_path / "cutover-record.json")
 
 
 def forward(dbs, **kw):
     return cutover.forward(dbs.old, dbs.app, dbs.record, **kw)
 
 
-def scalar(url, query, params=None):
-    with _bd_db.connect(url) as conn:
-        return conn.execute(query, params).fetchone()[0]
-
-
-def columns_of(url, schema, table):
-    """The table's columns in the database's own order, from the catalog (not the command's map)."""
-    with _bd_db.connect(url) as conn:
-        return [r[0] for r in conn.execute(
-            "select a.attname from pg_attribute a join pg_class c on c.oid = a.attrelid"
-            " join pg_namespace n on n.oid = c.relnamespace where n.nspname = %s and c.relname = %s"
-            " and a.attnum > 0 and not a.attisdropped order by a.attnum", (schema, table)).fetchall()]
-
-
-ORDER = {"settings": 'key collate "C"', "schema_migrations": "name", "integration_events": 'provider collate "C", event_id collate "C"'}
-
-
-def rows(url, schema, table, cols):
-    return src.table_rows(url, schema, table, cols, ORDER.get(table, "id"))
-
-
-def bd_counts(url):
-    with _bd_db.connect(url) as conn:
-        tables = [r[0] for r in conn.execute(
-            "select relname from pg_class where relnamespace = 'bd'::regnamespace and relkind = 'r'"
-            " and relname <> 'schema_migrations' order by 1").fetchall()]
-        return {t: conn.execute("select count(*) from bd.%s" % t).fetchone()[0] for t in tables}
+USERS_LINES = [         # bd.users in the canonical form, worked by hand from the fixture
+    '[1, "marlo.quint@example.com", "Marlo Quint", "salesperson", true, "sub-ZQ-0001", '
+    '"2026-11-01T06:30:00.123456+00:00", "2026-01-05T15:00:00+00:00"]',
+    '[2, "tamsin.okafor@example.com", "Tamsin Okafor", "assistant", true, null, null, '
+    '"2026-01-05T15:00:01+00:00"]',
+    '[3, "ziggy.halvorsen@example.com", "Ziggy Halvorsen", "admin", false, "", '
+    '"2026-03-08T07:59:59+00:00", "2026-01-05T15:00:02+00:00"]',
+]
 
 
 def md5_rows(lines):
@@ -182,15 +150,50 @@ def test_every_identity_table_takes_a_new_row_after_the_copy(dbs, capsys):
 def test_sequence_problems_names_a_sequence_that_is_not_past_its_highest_id(dbs, capsys):
     assert forward(dbs) == EXIT_OK
     with _bd_db.connect(dbs.app) as conn:
-        assert cutover.sequence_problems(conn, "bd") == []
+        assert cutover.sequence_problems(conn, "tool") == []
     with _bd_db.connect(dbs.tool) as conn:
         conn.execute("select setval(pg_get_serial_sequence('bd.users', 'id'), 3)")       # next is 4: fine
         conn.execute("select setval(pg_get_serial_sequence('bd.events', 'id'), 903)")    # next 904: fine
         conn.execute("select setval(pg_get_serial_sequence('bd.tasks', 'id'), 305, false)")  # next 305: not
         conn.execute("select setval(pg_get_serial_sequence('bd.imports', 'id'), 2)")     # next 3: not
     with _bd_db.connect(dbs.app) as conn:
-        problems = cutover.sequence_problems(conn, "bd")
+        problems = cutover.sequence_problems(conn, "tool")
     assert [p.split(":")[0] for p in problems] == ["tasks", "imports"]
+
+
+def test_a_sequence_already_past_the_copy_is_never_moved_back(dbs, capsys):
+    """Schema bd once held test rows that were deleted, leaving bd.contacts' sequence at 500. The old
+    database's highest contact is 59 and its sequence had handed out 75. Ids 76 to 500 may be named
+    somewhere already, so the next contact is 501, not 76."""
+    with _bd_db.connect(dbs.tool) as conn:
+        conn.execute("select setval(pg_get_serial_sequence('bd.contacts', 'id'), 500)")
+    assert forward(dbs) == EXIT_OK, capsys.readouterr().err
+    with _bd_db.connect(dbs.app) as conn:
+        assert conn.execute("insert into bd.contacts (company_id, name) values (48, 'New Zz')"
+                            " returning id").fetchone()[0] == 501
+
+
+def bd_sequences(url):
+    """{sequence: (last_value, is_called)} for every sequence in schema bd, read plainly."""
+    with _bd_db.connect(url) as conn:
+        names = [r[0] for r in conn.execute("select schemaname || '.' || sequencename from pg_sequences"
+                                            " where schemaname = 'bd' order by 1").fetchall()]
+        return {n: tuple(conn.execute("select last_value, is_called from %s" % n).fetchone()) for n in names}
+
+
+def test_a_sequence_that_cannot_be_set_puts_back_the_ones_set_before_it(dbs, capsys):
+    """bd_app may not set bd.tasks' sequence here, so setval fails on the sixth table, after users,
+    companies, contacts, interactions and task_batches were set. setval is not undone by a rollback:
+    the command puts those five back itself, and keeps nothing."""
+    with _bd_db.connect(dbs.tool) as conn:
+        seq = conn.execute("select pg_get_serial_sequence('bd.tasks', 'id')").fetchone()[0]
+        conn.execute("revoke update on sequence %s from bd_app" % seq)
+    before = bd_sequences(dbs.tool)
+    assert forward(dbs) == EXIT_ERROR
+    assert "setting the sequences failed" in capsys.readouterr().err
+    assert bd_sequences(dbs.tool) == before
+    assert set(bd_counts(dbs.tool).values()) == {0}
+    assert not dbs.record.exists()
 
 
 # ── the proof ───────────────────────────────────────────────────────────────────────────────────
@@ -220,14 +223,7 @@ def test_the_checksums_follow_the_declared_canonical_form(dbs, capsys):
         '["default_frequency", {"maintenance": 3}, "2026-01-05T15:00:00+00:00", null]',
         '["lead_sources", ["Referral", "Web", "Other/Misc"], "2026-11-01T06:30:00+00:00", 1]',
     ])
-    assert tables["users"]["checksum"] == md5_rows([
-        '[1, "marlo.quint@example.com", "Marlo Quint", "salesperson", true, "sub-ZQ-0001", '
-        '"2026-11-01T06:30:00.123456+00:00", "2026-01-05T15:00:00+00:00"]',
-        '[2, "tamsin.okafor@example.com", "Tamsin Okafor", "assistant", true, null, null, '
-        '"2026-01-05T15:00:01+00:00"]',
-        '[3, "ziggy.halvorsen@example.com", "Ziggy Halvorsen", "admin", false, "", '
-        '"2026-03-08T07:59:59+00:00", "2026-01-05T15:00:02+00:00"]',
-    ])
+    assert tables["users"]["checksum"] == md5_rows(USERS_LINES)
     assert tables["integration_events"]["checksum"] == md5_rows([
         '["Quo", "evt-ZQ-1", "sms.received", "2026-11-02T18:00:00+00:00", {"text": "ZQ"}, "ignored", null]',
         '["quo", "evt-ZQ-1", "call.completed", "2026-11-01T07:30:30+00:00", '
@@ -274,14 +270,7 @@ def test_the_checksum_does_not_depend_on_the_sessions_time_zone(dbs, capsys):
                                                                    " -c TimeZone=America/Chicago"),
                            dbs.record) == EXIT_OK
     tables = json.loads(dbs.record.read_text(encoding="utf-8"))["tables"]
-    assert tables["users"]["checksum"] == md5_rows([
-        '[1, "marlo.quint@example.com", "Marlo Quint", "salesperson", true, "sub-ZQ-0001", '
-        '"2026-11-01T06:30:00.123456+00:00", "2026-01-05T15:00:00+00:00"]',
-        '[2, "tamsin.okafor@example.com", "Tamsin Okafor", "assistant", true, null, null, '
-        '"2026-01-05T15:00:01+00:00"]',
-        '[3, "ziggy.halvorsen@example.com", "Ziggy Halvorsen", "admin", false, "", '
-        '"2026-03-08T07:59:59+00:00", "2026-01-05T15:00:02+00:00"]',
-    ])
+    assert tables["users"]["checksum"] == md5_rows(USERS_LINES)
 
 
 def test_the_output_prints_every_table_with_its_count_and_checksum(dbs, capsys):
@@ -335,18 +324,73 @@ def test_check_prints_the_source_proof_and_writes_nothing(dbs, capsys):
     assert list(dbs.record.parent.iterdir()) == []
 
 
-def test_check_and_forward_agree_on_the_checksums(dbs, capsys):
-    assert cutover.check(dbs.old, dbs.app) == EXIT_OK
-    out = capsys.readouterr().out
-    assert forward(dbs) == EXIT_OK
-    tables = json.loads(dbs.record.read_text(encoding="utf-8"))["tables"]
-    for table, entry in tables.items():
-        line = next(x for x in out.splitlines() if x.split()[:1] == [table])
-        assert line.split()[1:3] == [str(entry["count"]), entry["checksum"]]
+# ── the commit ──────────────────────────────────────────────────────────────────────────────────
+def test_a_duplicates_list_that_fails_keeps_nothing(dbs, monkeypatch, capsys):
+    """The list is read inside the copy's transaction, before the commit: when it fails, nothing is
+    kept, so exit 1 still means nothing was kept."""
+    import psycopg
+
+    from bd import account_pairs_service
+
+    def broken(conn):
+        raise psycopg.errors.InsufficientPrivilege("made up for the test")
+
+    monkeypatch.setattr(account_pairs_service, "likely_pairs", broken)
+    assert forward(dbs) == EXIT_ERROR
+    assert "the duplicates list failed" in capsys.readouterr().err
+    assert set(bd_counts(dbs.tool).values()) == {0}
+    assert not dbs.record.exists()
+
+
+def test_a_commit_the_server_rejects_keeps_no_record(dbs, capsys):
+    """A deferred constraint trigger in schema bd fails at COMMIT: the server said no, so the record
+    goes, the sequences are put back and schema bd stays empty."""
+    with _bd_db.connect(dbs.tool) as conn:
+        conn.execute("create function bd.zz_no() returns trigger language plpgsql as $$"
+                     " begin raise exception 'no'; end $$")
+        conn.execute("create constraint trigger zz_no after insert on bd.events deferrable initially deferred"
+                     " for each row execute function bd.zz_no()")
+    before = bd_sequences(dbs.tool)
+    assert forward(dbs) == EXIT_ERROR
+    assert "committing schema bd failed" in capsys.readouterr().err
+    assert not dbs.record.exists()
+    assert set(bd_counts(dbs.tool).values()) == {0}
+    assert bd_sequences(dbs.tool) == before
+
+
+def test_a_commit_whose_outcome_is_unknown_keeps_the_record(dbs, monkeypatch, capsys):
+    """The connection drops during the COMMIT after the server took it (a pooler can do that): the
+    copy is in schema bd, so the record that proves it must stay, and the command says to run check
+    and exits 6, not 1 (exit 1 means nothing was kept)."""
+    import psycopg
+
+    real = cutover._connect
+
+    def connect(url, side, read_only):
+        conn = real(url, side, read_only)
+        if side == "tool":
+            commit = conn.commit
+
+            def commit_then_drop():
+                if not dbs.record.exists():
+                    return commit()
+                commit()
+                conn.close()
+                raise psycopg.OperationalError("made up: the server closed the connection")
+
+            conn.commit = commit_then_drop
+        return conn
+
+    monkeypatch.setattr(cutover, "_connect", connect)
+    assert forward(dbs) == EXIT_COMMIT_UNKNOWN
+    err = capsys.readouterr().err
+    assert "the commit's outcome is unknown" in err and "run check" in err
+    assert dbs.record.exists()
+    assert bd_counts(dbs.tool)["contacts"] == len(src.ROWS["contacts"])
 
 
 # ── the duplicates list ─────────────────────────────────────────────────────────────────────────
-def test_the_duplicates_list_is_the_possible_duplicates_rule_on_the_copied_data(dbs, capsys):
+def test_the_duplicates_list_is_the_likely_duplicate_accounts_rule_on_the_copied_data(dbs, capsys):
     assert forward(dbs) == EXIT_OK
     out = capsys.readouterr().out.splitlines()
     start = next(i for i, x in enumerate(out) if x.startswith("Likely duplicate BD accounts"))
