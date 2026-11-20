@@ -19,7 +19,9 @@ source built from BD's original four migrations.
 | `reverse --record <record-file>` | A rollback: the reverse preflight (the old database must still match the record), schema `bd` copied back into the old database's tables in one transaction, the proof, the sequences, and `bd_carry` saved | The old database only (its BD tables and `bd_carry`); schema `bd` is only read |
 
 Every run is all or nothing: a refusal writes nothing, and a failed proof or a broken freeze rolls
-back everything that run wrote.
+back everything that run wrote, the id sequences it had already set included. The one exception is
+exit 6 (below): the connection dropped during the forward copy's commit, so whether it landed is
+unknown.
 
 ## The two databases
 
@@ -27,7 +29,7 @@ They come from the environment, never the command line, and the command never pr
 
 | Variable | Value |
 |---|---|
-| `BD_CUTOVER_OLD_URL` | The old BD database as its **owner login**, by its service name on the old BD network: `postgresql://<old-db-owner>:<old-db-password>@<old-db-service>:5432/<old-db-name>`. `check` and `forward` only read it (their sessions on it are read only); only `reverse` writes there. |
+| `BD_CUTOVER_OLD_URL` | The old BD database as its **owner login**, by its service name on the old BD network: `postgresql://<old-db-owner>:<old-db-password>@<old-db-service>:5432/<old-db-name>`. `check` and `forward` only read it (their sessions on it are read only); only `reverse` writes there. The owner is the database container's superuser, which can see every other session; a login that cannot is refused. |
 | `BD_CUTOVER_TOOL_URL` | The tool's database as **`bd_app`**: the same value as `BD_DATABASE_URL` in the tool's env file (the session pooler on prod). The command refuses a login that can change schema `bd`. `reverse` only reads it. |
 
 `bd_app` already holds what the copy needs (#813 sets it up): it may read and write schema `bd`'s
@@ -95,13 +97,20 @@ and the reverse copy cannot run without it:
    one runs.
 4. Run `check` again. It must exit 0.
 5. Run `forward --record /records/<record-file>.json`. Exit 0 means every table matches, the
-   freeze held, the sequences are set and the record is written. It then prints the list of likely
-   duplicate BD accounts (account ids, names and hints only): keep it for Hanz in the private ops
-   notes, not in a GitHub issue (the repo is public, and these are customers' names). Nothing is merged: an assistant or BD admin merges a pair, or keeps it separate, in the
-   BD CRM itself (#811).
-6. Any other exit code: nothing was kept in schema `bd`. Stop the cut-over and restart the old app
+   freeze held, the sequences are set, the record is written and the copy is committed. It then
+   prints the list of likely duplicate BD accounts (account ids, names and hints only): keep it for
+   Hanz in the private ops notes, not in a GitHub issue (the repo is public, and these are
+   customers' names). Nothing is merged: an assistant or BD admin merges a pair, or keeps it
+   separate, in the BD CRM itself (#811).
+6. Exit 6: the connection dropped during the commit, so it is unknown whether schema `bd` holds the
+   copy. The record is kept. Do not restart the old app yet. Run `check`: if it refuses with
+   `bd.<table> holds rows`, the copy landed, the record proves it, and the cut-over goes on (the
+   likely duplicate pairs show under Possible duplicates on the BD Contacts page instead of the
+   printed list). If schema `bd` is still empty, nothing was kept: move the record aside (it proves
+   nothing) and treat it like the next point.
+7. Any other exit code: nothing was kept in schema `bd`. Stop the cut-over and restart the old app
    (#814). Do not run `forward` again without finding the cause.
-7. Keep the record file as above, then go on with #814 (read-only checks, the switch, the CSP
+8. Keep the record file as above, then go on with #814 (read-only checks, the switch, the CSP
    check, the redirect).
 
 ## Rollback: the reverse copy (through day 7, on Hanz's go)
@@ -122,7 +131,7 @@ The order is #802's rollback (Q38):
      state in the side schema `bd_carry`: merge marks of merged-away accounts, the people at them, and
      kept pairs. The old app never reads `bd_carry`.
    - Exit 0 prints "bd_carry saved" with the number of merge marks and kept pairs.
-4. Restore the nginx backup for bd.wetreadwell.com.
+4. Restore the nginx backup for `<bd-host>`.
 5. Start the old app with its weekly batch off, check it, then turn its batch back on.
 
 During the rollback a merged-away account shows in the old app as an empty account. Keep the record
@@ -149,6 +158,7 @@ and the exit code is 3. Nothing was written anywhere.
 | The line says | What it means | What to do |
 |---|---|---|
 | `set BD_CUTOVER_OLD_URL ... in the environment` (exit 2) | A variable is missing | Fix `cutover.env` |
+| `the old login cannot see other sessions` | `BD_CUTOVER_OLD_URL` is a login that is neither a superuser nor in `pg_read_all_stats`, so Postgres hides the other sessions from it and the old app could still be connected unseen | Use the old database's owner login |
 | `N other clients are connected to the old database` | Something still holds a session on the old database: the old app, a backup, a `psql` left open | Stop it, then run again. Before the freeze this is expected |
 | `the old database has no migrations ledger` / `... ledger is not BD's original four` | The old database is not BD's, or BD gained a migration the command does not know | Check `BD_CUTOVER_OLD_URL`. A newer BD migration needs a code change to the command's map first |
 | `the old database has no table ...` / `... has a table (or column) the map does not know` / `... is not what the map says` | The old database's shape is not BD's four migrations | As above |
@@ -176,6 +186,11 @@ stops with an error and keeps nothing.
 | 3 | Refused by the preflight (above) | Fix what it names; nothing was written |
 | 4 | The proof did not match: a table's count or checksum, a sequence, or the `bd_carry` read back | Nothing was kept. On cut-over day: stop and restart the old app |
 | 5 | The freeze did not hold: the source changed during the copy (forward: the old database; reverse: schema `bd`) | Nothing was kept; find the writer, then run again |
+| 6 | Forward only: the connection dropped during the commit, so whether schema `bd` holds the copy is unknown. The record is kept | Run `check` before anything else (cut-over day, step 6) |
+
+The freeze is proven up to the proof. Between the source's second reading and the commit, the
+command only sets the sequences, reads the duplicates list and writes the record, a moment in which
+the freeze itself (the old app stopped, no other client) is what keeps the old database still.
 
 ## What it prints
 

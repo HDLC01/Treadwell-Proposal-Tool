@@ -1,4 +1,5 @@
-"""The Possible duplicates rule for BD accounts (#811, #802 Q21, Q36), shared by its two readers.
+"""The Likely duplicate accounts rule (#811, #802 Q21, Q36): which BD accounts may be one company.
+Shared by its two readers; the Contacts page shows its pairs under the Possible duplicates filter.
 
     from bd import account_pairs_service as pairs
     found = pairs.likely_pairs(conn)          # [(cleaned name, a row, b row)], a.id < b.id

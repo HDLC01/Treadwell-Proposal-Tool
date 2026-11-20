@@ -9,14 +9,9 @@ WHO. The assistant, the BD admin and the super admin (Q21, Q36), `can.merge_comp
 is 403 on all four. Nothing merges on its own: no worker, startup hook or read calls a merge
 (tests/test_bd_account_merge.py runs the Friday batch and every read and finds nothing merged).
 
-THE RULE (bd/account_pairs_service.py, which the cut-over command's duplicates list shares; the
-cleaning is bd/normalize.py account_key). Two accounts that are not merged away are a likely pair when
-their cleaned names are equal, at least one of them has a BD person who is not archived (they are
-likely duplicate BD accounts: the BD tab shows that one), and the pair was not kept separate. A
-shared phone, or a shared email
-domain that is not a free mail one, among their people who are not archived is shown as a hint; a
-hint alone never makes a pair. The paths sit under /api/bd/contacts/, so the tool's audit log records
-each read (the hints carry phone numbers), by path alone.
+THE RULE: bd/account_pairs_service.py (the cut-over command's duplicates list shares it). The paths
+sit under /api/bd/contacts/, so the tool's audit log records each read (the hints carry phone
+numbers), by path alone.
 
 MERGE (a soft merge). Both companies are locked first, in id order (contacts_service.lock_companies;
 Add contact, a contact's company change and the import read an account FOR SHARE, so they wait for a
