@@ -48,6 +48,7 @@ function element(id) {
     getAttribute(k) { return Object.prototype.hasOwnProperty.call(e.attrs, k) ? e.attrs[k] : null; },
     removeAttribute(k) { delete e.attrs[k]; },
     focus() {}, querySelector() { return null; }, querySelectorAll() { return []; },
+    closest() { return null; },
   };
   return e;
 }

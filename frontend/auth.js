@@ -475,8 +475,9 @@
   // never moves, which is why this is not scrollIntoView: on a phone the menu is a drawer off screen.
   function bdRevealLit(list) {
     const lit = list.querySelector(".tw-bd-sec.active");
+    if (!lit) return;
     const nav = list.closest(".tw-nav");
-    if (!lit || !nav) return;
+    if (!nav) return;
     const r = lit.getBoundingClientRect();
     const n = nav.getBoundingClientRect();
     if (r.bottom > n.bottom) nav.scrollTop += Math.ceil(r.bottom - n.bottom);
