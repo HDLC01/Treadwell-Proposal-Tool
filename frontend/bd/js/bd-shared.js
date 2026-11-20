@@ -673,6 +673,26 @@
     return (e && e.message) || "Something went wrong.";
   }
 
+  /** A part of a page that did not load (#809): the server's reason and Try again, a data-retry
+   *  button the page answers with one click handler on `el`, so a redraw never leaves a dead button.
+   *  `el` is no longer busy. */
+  function errorBox(el, e) {
+    if (!el) return;
+    el.setAttribute("aria-busy", "false");
+    el.innerHTML = '<div class="error-box" role="alert"><p>' + esc(errText(e)) + "</p>" +
+      '<button type="button" class="btn" data-retry>Try again</button></div>';
+  }
+
+  /** A sentence in place of a page's content (#809: a refused /api/bd/me, or a BD role with no part
+   *  of the page), as an info panel with the words set as text. `cls` is the page's own class for
+   *  the panel. `el` is no longer busy. */
+  function note(el, words, cls) {
+    if (!el) return;
+    el.setAttribute("aria-busy", "false");
+    el.innerHTML = '<div class="panel-info' + (cls ? " " + esc(cls) : "") + '" role="status">' + icon("info", 18) +
+      "<span>" + esc(words) + "</span></div>";
+  }
+
   /** A button waiting on the server: disabled, .is-busy and aria-busy while `on`. */
   function setBusy(btn, on) {
     if (!btn) return;
@@ -958,6 +978,8 @@
     pageHref: pageHref,
     setting: setting,
     errText: errText,
+    errorBox: errorBox,
+    note: note,
     setBusy: setBusy,
     withRole: withRole,
     closeMenu: closeMenu,

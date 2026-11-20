@@ -120,6 +120,15 @@ def signed_in_identity(request: Request) -> dict:
     return identity
 
 
+def sign_in_domain() -> str:
+    """The email domain the proposal tool's sign-in lets in (supabase_client.ALLOWED_DOMAIN, the
+    gate's rule, read at call time). BD's People table adds a login only on it (#809). The one tool
+    setting BD reads, read-only and only here (bd/config.py; tests/test_bd_config.py)."""
+    import supabase_client
+
+    return str(supabase_client.ALLOWED_DOMAIN or "").strip().lower().lstrip("@")
+
+
 def current_user(request: Request) -> dict:
     """FastAPI dependency: the signed-in person's active BD login (a dict). One checkout checks the
     ledger, then looks the person up. Cached on the request."""
@@ -186,6 +195,10 @@ def can(user) -> dict:
         "cadence": a or role in ("salesperson", "assistant", "manager"),
         # Deletes a logged entry, or changes one somebody else logged.
         "manage_entries": a,
+        # Adds a BD admin, or changes an admin's login (#809, Q29): the super admin's alone
+        # (refuse_new_login / refuse_login_change below). BD's Admin page offers the admin roles, and
+        # an admin's row, only to this person, and tells a plain admin why the row is locked.
+        "manage_admins": role == "super_admin",
     }
 
 

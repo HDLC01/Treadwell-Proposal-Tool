@@ -51,11 +51,14 @@ function element(id) {
     set innerHTML(v) { e._html = String(v); e._text = stripTags(String(v)); },
     setAttribute(k, v) { e.attrs[k] = String(v); },
     getAttribute(k) { return Object.prototype.hasOwnProperty.call(e.attrs, k) ? e.attrs[k] : null; },
+    hasAttribute(k) { return Object.prototype.hasOwnProperty.call(e.attrs, k); },
     removeAttribute(k) { delete e.attrs[k]; },
     addEventListener(t, fn) { (e.listeners[t] = e.listeners[t] || []).push(fn); },
     classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
     querySelector() { return null; }, querySelectorAll() { return []; }, appendChild() {},
     focus() {}, contains() { return false; },
+    // #809: the Admin and Analytics pages add a glyph or <option>s to an element that is there.
+    insertAdjacentHTML(_where, v) { e.innerHTML = e._html + String(v); },
   };
   return e;
 }

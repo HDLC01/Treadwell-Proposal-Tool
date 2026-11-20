@@ -42,8 +42,9 @@ import re
 
 import pytest
 
-from _bd_browser import (DESKTOP, MOVED_PAGES, NOT_BUILT, PHONE, Page, api, bd_links, browser, focus_is_on_the_page,
-                         live_app_db, menu_acts, require_playwright, reseed, run_sql, sideways, toasts)
+from _bd_browser import (DESKTOP, MOVED_PAGES, NOT_BUILT, PHONE, SECTION_LANDED, Page, api, bd_links, browser,
+                         focus_is_on_the_page, live_app_db, menu_acts, require_playwright, reseed, run_sql,
+                         sideways, toasts)
 
 AVERY = "avery.quill@example.com"         # salesperson
 CASEY = "casey.moret@example.com"         # assistant
@@ -1286,7 +1287,10 @@ def test_the_manager_is_told_adding_is_not_part_of_the_role(page_as, expect):
 
 
 # ── the sidebar's BD sections, and links ─────────────────────────────────────────────────────────
-SECTIONS = {AVERY: ["/bd/", "/bd/add.html"], CASEY: ["/bd/add.html"], DEVON: ["/bd/"], EMERY: ["/bd/", "/bd/add.html"]}
+SECTIONS = {AVERY: ["/bd/", "/bd/add.html", "/bd/review.html", "/bd/admin.html"],
+            CASEY: ["/bd/add.html", "/bd/review.html", "/bd/admin.html"],
+            DEVON: ["/bd/", "/bd/review.html", "/bd/analytics.html"],
+            EMERY: ["/bd/", "/bd/add.html", "/bd/review.html", "/bd/analytics.html", "/bd/admin.html"]}
 
 
 @pytest.mark.parametrize("email", list(SECTIONS), ids=["salesperson", "assistant", "manager", "admin"])
@@ -1298,10 +1302,7 @@ def test_each_section_a_role_can_use_works_and_no_other_shows(page_as, expect, e
     assert hrefs == SECTIONS[email], hrefs
     for href in hrefs:
         pg.locator('#tw-bd-sections a[href="%s"]' % href).first.click()
-        if href == "/bd/add.html":
-            pg.locator("#add-form").wait_for(timeout=15000)
-        else:
-            pg.wait_for_selector("#summary .wk-progress-in, [data-pick]", timeout=15000)
+        pg.locator(SECTION_LANDED[href]).first.wait_for(timeout=15000)
         expect(pg.locator('#tw-bd-sections a[aria-current="page"]')).to_have_attribute("href", href)
         pg.goto(pg.url.split("/bd/")[0] + contact_path(DANA))
         pg.locator("#cd-title").wait_for(timeout=15000)

@@ -1,8 +1,9 @@
 """The numbers and bodies every BD route reads the same way: limit / offset, ids, a JSON object body.
 
-    from bd.paging import page_params, query_int, as_id, path_id, json_object
-    fields = {}
-    limit, offset = page_params(request.query_params, fields)   # limit default 100, max 500
+    from bd.paging import page_params, page_or_400, query_int, as_id, path_id, json_object
+    limit, offset = page_or_400(request.query_params)            # limit default 100, max 500; 400
+    fields = {}                                                   # or, beside other field checks:
+    limit, offset = page_params(request.query_params, fields)
     if fields:
         raise errors.bad_request("Some fields need fixing.", fields)
     cid = path_id(id, "That contact does not exist.")             # 404 with the route's sentence
@@ -77,3 +78,14 @@ def page_params(params, fields: dict):
     limit = query_int(params, "limit", fields)
     offset = query_int(params, "offset", fields)
     return min(500, limit or 100), offset or 0
+
+
+def page_or_400(params):
+    """page_params for a route that reads nothing else from the query string: (limit, offset), or
+    400 "Some fields need fixing." with the bad one's sentence. #809's routers use it; the older
+    ones still write the three lines out and can move to it later."""
+    fields: dict = {}
+    limit, offset = page_params(params, fields)
+    if fields:
+        raise errors.bad_request("Some fields need fixing.", fields)
+    return limit, offset

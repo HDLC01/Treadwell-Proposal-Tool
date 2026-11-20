@@ -6,7 +6,8 @@ collapsible "BD CRM" row. What a person sees:
 
   * Desktop: the BD CRM row (BETA) is the one lit row on every /bd/ page, its group is open, and the
     sections are exactly the ones the person's BD role may open, the current one lit by full path.
-    That is This Week and Add contact (#808), each only for the roles BD's can() gives it to.
+    That is This Week, Add contact (#808), Potential BD Contacts, Analytics and Admin (#809), each
+    only for the roles BD's can() gives it to.
     On a laptop-height window (1280 by 800) the menu scrolls the lit section into sight.
   * The chevron is a real button (aria-expanded, aria-controls). On a tool page the group starts
     shut and asks BD nothing; on desktop the last choice is remembered (tw_bd_open), never on a
@@ -44,10 +45,13 @@ WEEK_PEOPLE = [
     ("emery.stoll@example.com", "Emery", CHOOSE),
     ("frankie.oduya@example.com", "Frankie", CHOOSE),
 ]
-# The sections each of them sees: Add contact is not the manager's (#808).
-BOTH = ["This Week", "Add contact"]
-SECTIONS = {"avery.quill@example.com": BOTH, "devon.hale@example.com": ["This Week"],
-            "emery.stoll@example.com": BOTH, "frankie.oduya@example.com": BOTH}
+# The sections each of them sees: Add contact is not the manager's (#808); Potential BD Contacts is
+# everyone's, Analytics the manager's and the admins', Admin the admins' and the salesperson's, who
+# imports from it until Contacts moves (#809).
+ADMINS = ["This Week", "Add contact", "Potential BD Contacts", "Analytics", "Admin"]
+SECTIONS = {"avery.quill@example.com": ["This Week", "Add contact", "Potential BD Contacts", "Admin"],
+            "devon.hale@example.com": ["This Week", "Potential BD Contacts", "Analytics"],
+            "emery.stoll@example.com": ADMINS, "frankie.oduya@example.com": ADMINS}
 SUPER = "frankie.oduya@example.com"
 ASSISTANT = "casey.moret@example.com"
 TURNED_OFF = "gale.ward@example.com"
@@ -120,15 +124,15 @@ def test_on_the_bd_home_the_bd_row_is_the_one_lit_row_and_its_group_is_open(env,
 
 def test_the_assistant_sees_add_contact_and_it_works(env):
     """This Week sends her to her BD home, Contacts; there, the BD CRM row is lit and her group is
-    open with her one section, Add contact (#808; Contacts joins it when its page moves), which opens
-    the form."""
+    open with her sections, Add contact (#808), Potential BD Contacts and Admin (#809; Contacts joins
+    them when its page moves). Add contact opens the form."""
     p = _page(env, ASSISTANT)
     try:
         page = p.open_signed_in("/bd/")
         page.wait_for_url(re.compile(r".*/bd/contacts\.html(\?.*)?$"), timeout=10000)
         page.wait_for_selector("#tw-bd-chev")
         _wait_sections(page)
-        assert _sections(page) == ["Add contact"]
+        assert _sections(page) == ["Add contact", "Potential BD Contacts", "Admin"]
         assert page.locator('#tw-bd-sections [aria-current="page"]').count() == 0
         lit = page.locator("#tw-sidebar .tw-nav-item.active")
         assert lit.count() == 1 and lit.get_attribute("href") == "/bd/"
@@ -181,7 +185,7 @@ def test_on_a_tool_page_the_group_starts_shut_asks_bd_nothing_and_the_chevron_op
         chev.click()
         _wait_sections(page)
         assert chev.get_attribute("aria-expanded") == "true"
-        assert _sections(page) == BOTH
+        assert _sections(page) == ADMINS
         assert page.locator('#tw-bd-sections [aria-current="page"]').count() == 0, \
             "This Week is not the page you are on"
         assert page.evaluate("localStorage.getItem('tw_bd_open')") == "1"
@@ -208,7 +212,7 @@ def test_a_bd_page_opens_the_group_whatever_was_remembered(env):
         page = p.open_signed_in("/bd/")
         _wait_sections(page)
         assert page.locator("#tw-bd-chev").get_attribute("aria-expanded") == "true"
-        assert _sections(page) == BOTH
+        assert _sections(page) == ADMINS
     finally:
         p.close()
 
@@ -293,7 +297,7 @@ def test_on_a_phone_a_tool_page_starts_shut_and_remembers_nothing(env):
         assert page.locator("#tw-bd-sections").is_hidden()
         chev.click()
         _wait_sections(page)
-        assert _sections(page) == BOTH
+        assert _sections(page) == ADMINS
         chev.click()
         assert chev.get_attribute("aria-expanded") == "false"
         assert page.locator("#tw-bd-sections").is_hidden()

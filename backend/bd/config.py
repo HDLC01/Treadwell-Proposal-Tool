@@ -6,6 +6,9 @@
 EVERY NAME STARTS WITH BD_. BD runs inside the proposal tool's process, so a BD setting must never
 be mistaken for one of the tool's. BD never reads the tool's own SUPER_ADMIN_EMAIL, ADMIN_EMAILS,
 DATABASE_URL or any other unprefixed name; tests/test_bd_config.py scans the package for that.
+The one read-only exception is the email domain the tool's sign-in lets in (AUTH_ALLOWED_DOMAIN, as
+supabase_client.ALLOWED_DOMAIN), which BD's People table adds logins on (#809): bd/auth.py's
+sign_in_domain reads it, and no other BD module imports supabase_client (test_bd_config.py).
 
 NO .env LOADING HERE. python-dotenv is not a BD dependency: the values come from the process
 environment, which the container (and the tool's own start-up) fills.

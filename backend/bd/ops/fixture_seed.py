@@ -204,7 +204,7 @@ FIXTURE: dict[str, list[dict[str, Any]]] = {
         {"id": 701, "file_name": "bd-fixture-import.csv", "dry_run": True,
          "started_at": _ts("2026-10-01 15:00:00"), "finished_at": _ts("2026-10-01 15:01:00"), "by_id": 5,
          "rows_read": 3, "created": 2, "updated": 0, "skipped": 1, "possible_duplicates": 1,
-         "errors": [{"row": 4, "error": "No company name"}]},
+         "errors": [{"sheet": "CSV", "row": 4, "message": "No company name."}]},
     ],
     "unmatched_calls": [
         {"id": 801, "provider": "quo", "external_id": "QX-0002", "kind": "call", "direction": "in",

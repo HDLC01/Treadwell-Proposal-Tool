@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Analytics · BD CRM · Treadwell</title>
+  <link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg" />
+  <!-- Warm the jsdelivr connection (DNS + TLS, no bytes) before the parser reaches the CDN script tag below. -->
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+  <!-- One light theme, like every page of the tool: no synthesized dark mode. -->
+  <meta name="color-scheme" content="only light" />
+  <link rel="stylesheet" href="/bd/bd.css" />
+</head>
+<body class="bd-app">
+  <!-- Analytics (#809): BD's analytics.html moved in as it is today, restyled like the tool. Its routes
+       (GET /api/bd/analytics and its CSV) are not built yet: the page shows the server's own
+       "not built yet" sentence. bd-analytics.js runs the period, dates and owner controls. -->
+  <main class="page an-page" id="main">
+    <header class="page-head-row an-head">
+      <div class="page-head">
+        <p class="eyebrow">BD CRM</p>
+        <h1 class="page-title">Analytics</h1>
+        <p class="page-sub" id="an-sub">&nbsp;</p>
+      </div>
+      <div class="wrap-row an-tools" id="an-tools" hidden>
+        <div class="tabs an-period" role="group" aria-label="Period" id="an-period">
+          <button type="button" data-period="week" aria-pressed="false">Week</button>
+          <button type="button" data-period="month" aria-pressed="false">Month</button>
+          <button type="button" data-period="quarter" aria-pressed="false">Quarter</button>
+          <button type="button" data-period="year" aria-pressed="true">Year</button>
+          <button type="button" data-period="custom" aria-pressed="false">Dates</button>
+        </div>
+        <div class="an-owner">
+          <label class="an-owner-label" for="an-owner">Owner</label>
+          <select class="select" id="an-owner"><option value="">Everyone</option></select>
+        </div>
+        <button type="button" class="btn" id="an-export" disabled>Download CSV</button>
+      </div>
+    </header>
+
+    <div class="card an-custom" id="an-custom" hidden>
+      <div class="an-dates" role="group" aria-labelledby="an-range-label">
+        <span class="label" id="an-range-label">Dates</span>
+        <div class="field">
+          <label for="an-from">From</label>
+          <input class="input an-date" type="date" id="an-from" />
+        </div>
+        <div class="field">
+          <label for="an-to">To</label>
+          <input class="input an-date" type="date" id="an-to" />
+        </div>
+      </div>
+      <div class="field-error" id="an-range-error" role="alert" hidden></div>
+    </div>
+
+    <div id="an-body" aria-busy="true">
+      <div class="an-cards">
+        <div class="skeleton skeleton-card"></div><div class="skeleton skeleton-card"></div>
+        <div class="skeleton skeleton-card"></div><div class="skeleton skeleton-card"></div>
+      </div>
+    </div>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
+  <script src="/js/icons.js"></script>
+  <script src="/auth.js"></script>
+  <script src="/shared.js"></script>
+  <script src="/js/crm-core.js"></script>
+  <script src="/bd/js/bd-api.js"></script>
+  <script src="/bd/js/bd-shared.js"></script>
+  <script src="/bd/js/bd-core.js"></script>
+  <script src="/bd/js/bd-analytics.js"></script>
+</body>
+</html>

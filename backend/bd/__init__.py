@@ -4,7 +4,8 @@ One package with package-relative imports, so nothing here can collide with the 
 modules (`bd.config` is never the tool's config). Ported from a clean export of BD's staging
 branch, never from a working folder.
 
-  config     every BD_ setting (python-dotenv is not used; the tool's settings are never read)
+  config     every BD_ setting (python-dotenv is not used; the tool's settings are never read,
+             except the sign-in domain, read-only, by auth.sign_in_domain alone)
   bizdate    Central dates and timestamps, Monday weeks, the BD_TODAY / BD_NOW overrides
   normalize  the company duplicate key and trimmed names
   phone      US numbers to E.164, the last-10 match key, the display form
@@ -21,7 +22,8 @@ branch, never from a working folder.
   ops/       BD's command-line scripts, apart from the tool's own ops scripts
              (staging_schema writes the BD part of backend/staging/schema_pg.sql;
              fixture_seed is the made-up data set; seed loads it into an empty staging or
-             test bd schema: python -m bd.ops.seed --person EMAIL=ROLE ...)
+             test bd schema: python -m bd.ops.seed --person EMAIL=ROLE ...; import_workbook reads
+             a contact workbook or CSV, for the import route and python -m bd.ops.import_workbook)
 
 THE API (#806), on the proposal tool's app, every route under /api/bd/:
   api        the BD router main.py includes: the BD switch first, the routers, the routes not
@@ -30,14 +32,18 @@ THE API (#806), on the proposal tool's app, every route under /api/bd/:
              app-wide), make_router(), the BD_ENABLED switch
   errors     the envelope ({"ok": false, "error", "message"}) and handle(), its one entry point
   auth       the BD login (bd.users) for the identity the tool's gate verified, the five BD roles,
-             can(), and who may change a BD login (only a super admin changes an admin)
+             can(), who may change a BD login (only a super admin changes an admin), and the
+             tool's sign-in domain a new BD login must be on
   appsettings  BD's Settings object (defaults merged with bd.settings)
   paging     limit / offset and other query-string numbers
   routers/   meta (me, settings, users), week (This Week and the task buttons), interactions
              (the timeline and logging), contacts (the list, the possible-duplicate person check,
              create, one contact's get, patch and confirm, archive), companies (the type-ahead,
-             one company, create, patch), admin (the manual weekly run), pending (503 after the
-             role check)
+             one company, create, patch), admin (BD's Admin page, separate from the tool's: the
+             People table of BD logins with only a super admin changing an admin, the settings
+             save, the manual weekly run, the telephony status, the unmatched calls), imports (the
+             workbook import with its 10 MB cap and zip-bomb limits, and its history), pending (503
+             after the role check: Potential BD Contacts, Analytics and the rest not built yet)
   events     the audit log, which is also a contact timeline's event rows
   contacts_service  what the contacts and companies routers share: the duplicate check, finding or
              making a company, a contact's field checks and size limits, making a contact

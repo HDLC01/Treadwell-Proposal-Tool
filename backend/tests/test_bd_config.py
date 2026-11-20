@@ -2,7 +2,8 @@
 
 The BD CRM now runs inside the proposal tool's process, so a BD setting must never be confused with
 one of the tool's: every name BD reads starts with BD_, BD never reads the tool's own
-SUPER_ADMIN_EMAIL (or any other unprefixed name), and nothing in the BD package loads a .env file
+SUPER_ADMIN_EMAIL (or any other unprefixed name; the one read-only exception is the tool's sign-in
+domain, read by bd/auth.py alone), and nothing in the BD package loads a .env file
 (python-dotenv is not a BD dependency). backend/.env.example lists exactly the BD_ settings the
 code reads.
 """
@@ -117,6 +118,18 @@ def test_bd_never_reads_the_tools_super_admin_or_admin_emails(fresh_env):
     for path in _bd_sources():
         src = path.read_text(encoding="utf-8")
         assert not re.search(r"""["'](SUPER_ADMIN_EMAIL|ADMIN_EMAILS)["']""", src), path
+
+
+# The one read-only exception to "BD never reads a tool setting": the email domain the tool's sign-in
+# lets in, which BD's People table checks a new login against. bd/auth.py, the seam to the tool's
+# gate, is the only BD module that may import the tool's supabase_client.
+_TOOL_AUTH_IMPORT = re.compile(r"""^\s*(import\s+supabase_client\b|from\s+supabase_client\s+import\b)|import_module\(\s*["']supabase_client""", re.M)
+
+
+def test_only_bd_auth_imports_the_tools_sign_in_module():
+    importers = sorted(p.relative_to(BD).as_posix() for p in _bd_sources()
+                       if _TOOL_AUTH_IMPORT.search(p.read_text(encoding="utf-8")))
+    assert importers == ["auth.py"], importers
 
 
 def test_no_bd_module_loads_a_dotenv_file():
