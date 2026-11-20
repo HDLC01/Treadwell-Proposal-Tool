@@ -21,9 +21,10 @@ MOVED WITH THEIR ROUTES:
     test_a_new_contact_obeys_the_same_limits. BD's safety-header asserts in them are not carried (see
     above); each refusal is checked for no-store instead.
 
-STILL WAITING FOR THEIR ROUTE (PUT /api/bd/admin/settings and the People routes, the ticket that moves
-BD's Admin page): test_an_enormous_pick_list_is_refused, test_a_pick_list_stops_at_100_values_of_120_characters,
-and the settings-list and user-name cases of the "text Postgres cannot hold" check.
+  * the Admin routes (#809, PUT /api/bd/admin/settings and the People routes):
+    test_an_enormous_pick_list_is_refused, test_a_pick_list_stops_at_100_values_of_120_characters, and
+    the settings-list, user-name and user-email cases of the "text Postgres cannot hold" check.
+    Nothing of BD's test_hardening is still waiting for a route.
 
 What stays, for every BD response class (200, 400, 401, 403, 404, 503 and a forced 500):
   * Cache-Control: no-store on every BD API answer, and never a Set-Cookie;
@@ -300,10 +301,17 @@ SURROGATE = json.dumps("a" + chr(0xD800) + "b")      # a lone surrogate: not enc
 
 def _unsaveable_cases(company_id):
     """(label, BD user id, method, path, raw JSON body or None). One value Postgres cannot store in
-    each place a person can type contact text; each must be answered with the 400 envelope. Avery (1)
-    is a salesperson. The settings and people cases wait for their routes (the Admin ticket)."""
+    each place a person can type text; each must be answered with the 400 envelope. Avery (1) is a
+    salesperson, Frankie (6) the super admin (the settings and People routes, #809)."""
     contact = '{"name": %s, "company": {"id": %d}}'
     return [
+        ("settings list NUL", 6, "PUT", "/api/bd/admin/settings", '{"industries": [%s]}' % NUL),
+        ("settings list surrogate", 6, "PUT", "/api/bd/admin/settings", '{"industries": [%s]}' % SURROGATE),
+        ("user name NUL", 6, "PATCH", "/api/bd/admin/users/4", '{"name": %s}' % NUL),
+        ("user email NUL", 6, "POST", "/api/bd/admin/users",
+         '{"email": %s, "name": "X", "role": "assistant"}' % json.dumps("a" + chr(0) + "b@example.com")),
+        ("new user name surrogate", 6, "POST", "/api/bd/admin/users",
+         '{"email": "nell@example.com", "name": %s, "role": "assistant"}' % SURROGATE),
         ("query q", 1, "GET", "/api/bd/contacts?q=%00", None),
         ("query industry", 1, "GET", "/api/bd/contacts?industry=%00", None),
         ("duplicates email", 1, "GET", "/api/bd/contacts/duplicates?email=%00", None),
@@ -326,12 +334,19 @@ def _unsaveable_cases(company_id):
     ]
 
 
-def test_text_postgres_cannot_hold_is_a_400_and_the_app_carries_on(bd_seeded, bd_db, bd_as_user):
+def test_text_postgres_cannot_hold_is_a_400_and_the_app_carries_on(bd_seeded, bd_db, bd_as_user, monkeypatch):
+    import supabase_client
+
+    monkeypatch.setattr(supabase_client, "ALLOWED_DOMAIN", "example.com")   # so a new login's email is checked
+
     def counts():
         return bd_db.execute("select (select count(*) from bd.contacts) as contacts,"
                              " (select count(*) from bd.companies) as companies,"
                              " (select count(*) from bd.interactions) as interactions,"
-                             " (select count(*) from bd.events) as events").fetchone()
+                             " (select count(*) from bd.events) as events,"
+                             " (select count(*) from bd.settings) as settings,"
+                             " (select json_agg(u order by u.id) from (select id, email, name from bd.users) u) as users"
+                             ).fetchone()
 
     before = counts()
     failures = []
@@ -441,3 +456,37 @@ def test_the_200_character_values_are_stored_whole(bd_seeded, bd_as_user, bd_db)
     assert avery.post("/api/bd/contacts/21/archive", json={"reason": "r" * 200}).status_code == 200
     assert bd_db.execute("select detail from bd.events where contact_id = 21 and kind = 'archived'"
                          " order by id desc limit 1").fetchone()["detail"] == "r" * 200
+
+
+# ── size limits on a pick list (moved with PUT /api/bd/admin/settings, #809) ──────────────────────
+# Every role loads the settings on every page, so each of lead_sources, industries, stages and
+# account_types holds at most 100 values of 120 characters or fewer (Hanz, 2026-11-11: "do all").
+PICK_SIZE = "Keep at most 100 values of 120 characters or fewer."
+
+
+def test_an_enormous_pick_list_is_refused(bd_seeded, bd_as_user, bd_db):
+    huge = ["industry %d" % n for n in range(20000)]
+    r = bd_as_user(6).put("/api/bd/admin/settings", json={"industries": huge})
+    assert r.status_code == 400, "a pick list of %d entries was accepted (%s)" % (len(huge), r.status_code)
+    _is_envelope(r, 400, "bad_request")
+    assert r.json()["fields"] == {"industries": PICK_SIZE}
+    assert bd_db.execute("select count(*) as n from bd.settings").fetchone()["n"] == 0
+
+
+@pytest.mark.parametrize("key", ["lead_sources", "industries", "stages", "account_types"])
+def test_a_pick_list_stops_at_100_values_of_120_characters(bd_seeded, bd_as_user, key):
+    frankie = bd_as_user(6)
+    keep = ["DSBC Sales", "Website Lead"] if key == "lead_sources" else []
+    hundred = keep + ["%s %d" % (key, n) for n in range(100 - len(keep))]
+    assert frankie.put("/api/bd/admin/settings", json={key: hundred}).status_code == 200
+    r = frankie.put("/api/bd/admin/settings", json={key: hundred + ["one more"]})
+    assert r.status_code == 400 and r.json()["fields"] == {key: PICK_SIZE}
+    longest = keep + ["x" * 120]
+    assert frankie.put("/api/bd/admin/settings", json={key: longest}).status_code == 200
+    r = frankie.put("/api/bd/admin/settings", json={key: keep + ["x" * 121]})
+    assert r.status_code == 400 and r.json()["fields"] == {key: PICK_SIZE}
+    # A refused PUT changes nothing.
+    assert frankie.get("/api/bd/settings").json()["settings"][key] == longest
+    # Both limits at once: 100 values, each of 120 characters.
+    full = keep + [("%d" % n).rjust(120, "x") for n in range(100 - len(keep))]
+    assert frankie.put("/api/bd/admin/settings", json={key: full}).status_code == 200

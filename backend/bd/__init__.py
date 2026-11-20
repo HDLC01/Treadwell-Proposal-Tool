@@ -21,7 +21,8 @@ branch, never from a working folder.
   ops/       BD's command-line scripts, apart from the tool's own ops scripts
              (staging_schema writes the BD part of backend/staging/schema_pg.sql;
              fixture_seed is the made-up data set; seed loads it into an empty staging or
-             test bd schema: python -m bd.ops.seed --person EMAIL=ROLE ...)
+             test bd schema: python -m bd.ops.seed --person EMAIL=ROLE ...; import_workbook reads
+             a contact workbook or CSV, for the import route and python -m bd.ops.import_workbook)
 
 THE API (#806), on the proposal tool's app, every route under /api/bd/:
   api        the BD router main.py includes: the BD switch first, the routers, the routes not
@@ -36,8 +37,11 @@ THE API (#806), on the proposal tool's app, every route under /api/bd/:
   routers/   meta (me, settings, users), week (This Week and the task buttons), interactions
              (the timeline and logging), contacts (the list, the possible-duplicate person check,
              create, one contact's get, patch and confirm, archive), companies (the type-ahead,
-             one company, create, patch), admin (the manual weekly run), pending (503 after the
-             role check)
+             one company, create, patch), admin (BD's Admin page, separate from the tool's: the
+             People table of BD logins with only a super admin changing an admin, the settings
+             save, the manual weekly run, the telephony status, the unmatched calls), imports (the
+             workbook import with its 10 MB cap and zip-bomb limits, and its history), pending (503
+             after the role check: Potential BD Contacts, Analytics and the rest not built yet)
   events     the audit log, which is also a contact timeline's event rows
   contacts_service  what the contacts and companies routers share: the duplicate check, finding or
              making a company, a contact's field checks and size limits, making a contact

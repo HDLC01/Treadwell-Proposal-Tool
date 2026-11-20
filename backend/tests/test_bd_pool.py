@@ -197,16 +197,19 @@ def test_no_bd_code_is_async():
     FastAPI runs in its threadpool. An `async def` would share the event loop's one thread with
     every other request (nested slots skipping the bulkhead, the whole tool stalled on a query).
 
-    ONE async def is allowed (#806): web.py's bd_handler, the route class's wrapper. FastAPI's own
+    Three async defs are allowed. web.py's bd_handler (#806), the route class's wrapper: FastAPI's own
     request handler is a coroutine, so the wrapper around it has to be one; it only awaits that
     handler (which runs the plain-def route in the threadpool) and turns an exception into the
-    envelope, touching no database. Every BD endpoint itself is checked below."""
+    envelope, touching no database. And the workbook import's upload reader (#809), imports.py's
+    read_upload with its counting receive wrapper capped: reading a streamed body has to await. It
+    runs after the role check, takes no connection and no slot, and hands the plain-def endpoint
+    bytes. Every BD endpoint itself is checked below."""
     import ast
     import inspect
 
     from bd import api as bd_api
 
-    allowed = {("web.py", "bd_handler")}
+    allowed = {("web.py", "bd_handler"), ("imports.py", "read_upload"), ("imports.py", "capped")}
     found = []
     for path in sorted((_bd_db.BACKEND / "bd").rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))

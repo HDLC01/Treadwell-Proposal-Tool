@@ -901,6 +901,173 @@ Any of `name` (blank is 400 `"A company needs a name."`), `city`, `industry` (te
 rename moves the cleaned name with it, so the duplicate check and Add contact find the new name.
 The same 200-character limits as `POST`. `{ "ok": true, "company": Company }`.
 
+### Admin (#809)
+
+BD's Admin page, separate from the proposal tool's own Admin page. Its People table is **BD's logins
+only** (`bd.users`): adding, changing or turning off a BD login never touches the proposal tool's
+profiles, roles, sidebar settings or Special permissions, and the tool's Admin page never touches a BD
+login. A proposal-tool admin has no BD role until a BD admin adds them here, like anyone else.
+"Run Friday batch now" (`POST /api/bd/admin/weekly/run`) is under This Week above.
+
+#### `GET /api/bd/admin/users` (admin)
+
+Every BD login, turned-off ones too, in id order. Paged by `limit` and `offset` like every other list.
+
+```json
+{ "ok": true, "items": [{ "id": 3, "name": "Casey Moret", "email": "casey.moret@example.com", "role": "assistant", "active": true, "last_seen_at": "2026-11-02T08:30:00-06:00" }], "total": 1 }
+```
+
+#### `POST /api/bd/admin/users` (admin; a super admin to add an admin)
+
+`{ "email", "role", "name"? }`. The email is trimmed and lower-cased and must be an address the
+proposal tool's sign-in lets in (its allowed domain), else 400 `{"email": "Use a @<domain> address."}`.
+`role` is one of the five BD roles (400 `"Pick a role."`). `name` is optional text of at most 120
+characters; without it the name comes from the email (`nell.ash@...` is "Nell Ash"). Someone who
+already has a BD login, turned off or not, is 409 `"That person already has a login."`. Only a
+`super_admin` may add an `admin` or `super_admin` (403 `"Only a super admin can add an admin."`: an
+admin a plain admin made could never be changed again).
+
+```json
+{ "email": "nell.ash@example.com", "name": "Nell Ash", "role": "salesperson" }
+```
+
+```json
+{ "ok": true, "user": { "id": 8, "name": "Nell Ash", "email": "nell.ash@example.com", "role": "salesperson", "active": true, "last_seen_at": null } }
+```
+
+#### `PATCH /api/bd/admin/users/{id}` (admin; a super admin to change an admin)
+
+Any of `role`, `active` (true or false; false turns the BD login off, and every BD route then answers
+403 "Your BD login is turned off. ..."), `name` (1 to 120 characters). **Nobody changes their own role
+or sign-in** (403 `"You can't change your own role or sign-in."`; your own name is fine). Changing a
+login that is an admin's, or making someone an admin, needs a `super_admin` (403 `"Only a super admin
+can change an admin."`). An unknown id is 404 `"That user does not exist."`. A field that does not
+change is not logged.
+
+```json
+{ "role": "manager", "active": true }
+```
+
+```json
+{ "ok": true, "user": { "id": 4, "name": "Devon Hale", "email": "devon.hale@example.com", "role": "manager", "active": true, "last_seen_at": "2026-10-30T16:15:00-05:00" } }
+```
+
+#### `PUT /api/bd/admin/settings` (admin)
+
+Send only the keys to change. `weekly` and `default_frequency` are **merged** into what is there (send
+`{"weekly": {"new_count": 6, "followup_count": 4}}` and the run day, hour and on/off stay). The result
+is checked as a whole before anything is kept; a bad PUT changes nothing and is 400 with `fields`
+(one field: its own sentence as the message; several: `"Some settings need fixing."`):
+
+- `weekly.new_count` and `weekly.followup_count` whole numbers 0 to 10 that **add up to 10**;
+  `run_day` `friday`, `saturday` or `sunday` (the run builds next week's list), `run_hour` 0 to 23,
+  `enabled` true or false; else "Pick Friday, Saturday or Sunday, an hour from 0 to 23, and on or off."
+- `bd_cadence` `weekly`, `monthly` or `quarterly`, else "Pick weekly, monthly or quarterly.";
+  `default_frequency.maintenance` 1 to 52 (a sent `default_frequency.bd` is ignored);
+  `weekly_meeting_goal` 0 to 50; `non_dsbc_website_min` 0 up to the goal; `ai_enabled` true or false.
+- `lead_sources`, `industries`, `stages`, `account_types`: at least one value, no blanks, no repeats
+  (any case) ("Keep at least one value, each one different."). `lead_sources` must keep every
+  `system_lead_sources` value. Each list holds **at most 100 values of 120 characters or fewer**, else
+  "Keep at most 100 values of 120 characters or fewer." (every role loads these on every page).
+- Read-only keys (`system_lead_sources`, `interaction_kinds`, `touch_kinds`, `call_outcomes`,
+  `timezone`, `maintenance_touch_days`) and unknown keys are ignored.
+
+The Friday worker reads the same settings, so a new `weekly.run_day` or `run_hour` moves the next
+Friday batch at once (it still runs only where `BD_WEEKLY_ENABLED` is on).
+
+```json
+{ "bd_cadence": "monthly", "default_frequency": { "maintenance": 3 }, "lead_sources": ["Current Account", "DSBC Sales", "Website Lead", "Other/Misc", "Trade Show"] }
+```
+
+Response: `{ "ok": true, "settings": Settings }`.
+
+```json
+{ "ok": false, "error": "bad_request", "message": "New people and follow-ups must add up to 10.", "fields": { "weekly": "New people and follow-ups must add up to 10." } }
+```
+
+#### `GET /api/bd/admin/telephony` (admin)
+
+Whether a phone system is connected. It reads only **whether** `BD_TELEPHONY_PROVIDER`,
+`BD_QUO_API_KEY` and `BD_QUO_WEBHOOK_SECRET` are set, the time of the provider's latest integration
+event and the count of open unmatched calls. It never answers a key or a secret. `provider` is
+`"null"` when none is set (`"No phone system connected yet."`); `quo` is connected when both its key
+and its webhook secret are set (`"Quo is connected."`, else `"Quo is picked, but its API key or webhook
+secret is not set."`); any other provider is `"This phone system is not supported yet."`.
+
+```json
+{ "ok": true, "telephony": { "provider": "null", "connected": false, "last_event_at": null, "unmatched_open": 1, "message": "No phone system connected yet." } }
+```
+
+#### `GET /api/bd/admin/unmatched-calls` (assistant, admin)
+
+Calls and texts whose number matched no contact, as UnmatchedCall, in id order. Query: `status`
+(`open` (default) | `attached` | `dismissed` | `all`; anything else is 400), `limit`, `offset`.
+
+#### `POST /api/bd/admin/unmatched-calls/{id}/attach` (assistant, admin)
+
+Puts the call on a contact's timeline (and, with `"save_number": true`, stores the number on the
+contact). `contact_id` is required (400 `"Pick a contact."`; an unknown one is 404 `"That contact does
+not exist."`). `outcome` (optional): how the call went, `answered` | `voicemail` | `no_answer`, as the
+assistant says (400 `"Pick how the call went."` otherwise). Without it, a call counts as `answered`
+only when it lasted **60 seconds or more**, else `no_answer`: a 40-second voicemail must never count
+as a live conversation. A text keeps no outcome. The attach closes no weekly task and suggests no next
+step, except that a due maintenance contact's pinned task closes with the follow-up. An unknown call
+is 404 `"That call does not exist."`; one already attached or dismissed is 409 `"That call was already
+handled."`; one the phone system has already put on a timeline is 409 `"That call is already on a
+contact's timeline."`.
+
+```json
+{ "contact_id": 32, "save_number": true, "outcome": "answered" }
+```
+
+```json
+{ "ok": true, "unmatched_call": { "id": 801, "status": "attached" }, "interaction": { "id": 109, "contact_id": 32, "contact": { "id": 32, "name": "Wes Calder", "company": { "id": 18, "name": "Osage Plains Brewing" } }, "kind": "call", "direction": "in", "counts_as_touch": true, "occurred_at": "2026-11-03T16:42:00-06:00", "duration_s": 95, "outcome": "answered", "summary": "Caller asked about a quote for a shop floor.", "transcript": null, "recording_url": null, "provider": "quo", "external_id": "QX-0002", "user": null } }
+```
+
+#### `POST /api/bd/admin/unmatched-calls/{id}/dismiss` (assistant, admin)
+
+The same 404 and 409 as attach.
+
+```json
+{ "ok": true, "unmatched_call": { "id": 801, "status": "dismissed" } }
+```
+
+#### `POST /api/bd/admin/import` (salesperson, assistant, admin)
+
+A manager gets 403 (and `can.import` is false for them). A **salesperson's** upload gives every
+contact it adds to that salesperson, whatever the Owner column says, and makes nobody a co-owner, so
+a salesperson can never hand contacts to someone else. A known contact that already has an owner keeps
+it (one with no owner gets the uploader), and the meetings the file logs are in the uploader's name.
+An assistant's or admin's upload follows the Owner column (a blank or unknown owner goes to the first
+active salesperson). The history lists everyone's imports.
+
+`multipart/form-data`: `file` (the workbook `.xlsx` or a `.csv`) and `dry_run` (`true` first, then
+`false` for "Import now"; anything but `false`, `0`, `no` or `off` is a dry run). Reads "Business
+Development Accounts" and "Maintenance Accounts" (header row 5, or the first of rows 1 to 15 that
+names the company and the contact), trims spaces and non-breaking spaces from company names, splits
+`Avery/Greg` into owner and co-owner, and turns meeting and Maintenance touch dates into `meeting`
+interactions. Idempotent on (normalized company, lower-case email). Re-importing keeps edits made in
+the app: the server remembers what the import last wrote to each field, and a field changes only
+when the file differs from the contact and either the import never wrote that field or the sheet now
+holds a different value than last time. A next step that a touch on or after its date already met is
+never brought back.
+
+**Limits.** The file is at most **10 MB**: 413 `{"error": "bad_request", "message": "That file is too
+big. The limit is 10 MB.", "fields": {"file": "Pick a smaller file."}}`, refused while the upload
+streams, before it is parsed. An `.xlsx` is a zip, and its own directory is checked before it is
+opened: at most 200 MB unpacked in all, at most 20 MB in any one part, and a part over 1 MB at most
+100 times its packed size, else 413 `"That workbook is too big to read."`. Another file type is 400
+`"Pick an .xlsx or .csv file."`; a file that cannot be read is 400 `"That file could not be read. Save
+it as an .xlsx workbook or a .csv and try again."`; no file is 400 `"Pick a file to import."`. A bad
+upload records nothing.
+
+A dry run and a real run both record an Import (see Import above) and answer `{ "ok": true, "import":
+Import }`; only a real run keeps the contacts and interactions it adds.
+
+#### `GET /api/bd/admin/imports` (salesperson, assistant, admin)
+
+`{ "ok": true, "items": [Import], "total": N }`, newest first, paged by `limit` and `offset`.
+
 ### Not built yet (503 after the role check)
 
 | Route | Who |
@@ -908,9 +1075,9 @@ The same 200-character limits as `POST`. `{ "ok": true, "company": Company }`.
 | `POST /api/bd/interactions/{id}/recommend` | salesperson |
 | `POST /api/bd/recommendations/{id}/confirm`, `.../dismiss` | salesperson |
 | `POST /api/bd/interactions/{id}/draft-followup`, `.../send-followup` | salesperson |
-| `GET /api/bd/review/candidates` | salesperson, assistant, manager |
-| `POST /api/bd/review/candidates/{id}/add`, `.../ignore` | salesperson, assistant |
-| `GET /api/bd/analytics`, `GET /api/bd/analytics/export.csv` | manager |
+| `GET /api/bd/review/candidates` (Potential BD Contacts) | salesperson, assistant, manager |
+| `POST /api/bd/review/candidates/{id}/add`, `.../ignore` (Potential BD Contacts) | salesperson, assistant |
+| `GET /api/bd/analytics`, `GET /api/bd/analytics/export.csv` (Analytics) | manager |
 | `POST /api/bd/contacts/{id}/merge` | assistant |
 | `POST /api/bd/webhooks/telephony/quo` | public (the provider's signature, once built); this exact path only |
 

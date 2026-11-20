@@ -17,4 +17,4 @@ Conventions every router follows (see bd/auth.py, bd/errors.py, bd/serialize.py,
   * output:  serialize.* for every object; lists are {"ok": true, "items": [...], "total": N}.
   * time:    bizdate.today_central() / now_central(); in SQL bd_today() / bd_now().
 """
-ROUTER_MODULES = ("meta", "week", "interactions", "contacts", "companies", "admin")
+ROUTER_MODULES = ("meta", "week", "interactions", "contacts", "companies", "admin", "imports")
