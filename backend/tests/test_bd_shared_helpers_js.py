@@ -80,6 +80,24 @@ def test_fmt_day_shows_the_year_only_across_a_year_boundary():
         ["Mon, Nov 9", "Mon, Jan 11, 2027", "Mon, Nov 9"]
 
 
+def test_fmt_month_day_is_the_date_as_written_with_the_year_only_in_another_year():
+    """#810: one month-day formatter for Contacts' "Monthly until Dec 31" pill and the contact page's
+    follow-up lines (they had a copy each). A date as written: no clock, no time zone."""
+    assert call(("fmtMonthDay", ["2026-12-31", TODAY]), ("fmtMonthDay", ["2027-01-31", TODAY]),
+                ("fmtMonthDay", ["2026-03-01", TODAY]), ("fmtMonthDay", ["2027-01-31", ""]),
+                ("fmtMonthDay", ["", TODAY]), ("fmtMonthDay", [None, TODAY])) ==         ["Dec 31", "Jan 31, 2027", "Mar 1", "Jan 31", "", ""]
+
+
+@pytest.mark.parametrize("e164,want", [
+    ("+19135550199", "913-555-0199"),
+    ("+447911123456", "+447911123456"),          # not a US number: shown as given, never a made-up US one
+    (None, "Unknown number"),
+    ("", "Unknown number"),
+])
+def test_an_unknown_calls_number_reads_as_the_phone_pages_show_it(e164, want):
+    assert one("callWords", {"from_e164": e164, "occurred_at": "2026-11-03T16:42:00-06:00"})["phone"] == want
+
+
 def test_chip_dates():
     assert call(("chipDate", ["week", TODAY]), ("chipDate", ["month", TODAY]), ("chipDate", ["3months", TODAY]),
                 ("chipDate", ["month", "2027-01-31"]), ("chipDate", ["month", "2028-01-31"]),

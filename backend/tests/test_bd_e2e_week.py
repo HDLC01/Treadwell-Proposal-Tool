@@ -247,9 +247,8 @@ def test_names_open_the_contact_page_and_so_does_the_menu(page_as, expect):
                          ids=["salesperson", "manager-asked", "manager-week", "admin-asked", "admin-week", "admin-empty"])
 def test_no_link_goes_to_a_bd_page_that_has_not_moved(env, page_as, email, path):
     """Spec #802, page links: a link to a BD page that has not moved is not drawn. Checked against
-    the pages that HAVE moved (MOVED_PAGES), not against what the server happens to serve: /bd/contacts.html
-    is there only as the assistant's redirect target, so a link to it would still be a link to
-    Contacts, which has not moved. Every role's view, the admin's empty week (the manual run), and
+    the pages that HAVE moved (MOVED_PAGES, every BD page since Contacts moved in #810), not against
+    what the server happens to serve. Every role's view, the admin's empty week (the manual run), and
     the open menus too."""
     _base, url, _b = env
     if path.endswith("owner=2"):
@@ -557,12 +556,13 @@ def test_a_manager_never_sees_the_manual_run(env, page_as, expect):
     assert pg.locator('[data-act="run-weekly"]').count() == 0
 
 
-def test_the_assistant_lands_on_the_contacts_is_coming_page(page_as, expect):
+def test_the_assistant_lands_on_contacts(page_as, expect):
+    """Her BD home (#810: the Contacts page itself, no longer a page saying it is coming)."""
     p, pg = page_as("/bd/", CASEY)
     pg.wait_for_url(re.compile(r".*/bd/contacts\.html(\?.*)?$"), timeout=10000)
-    expect(pg.locator("#main")).to_contain_text("The Contacts page is coming.")
-    links = pg.locator("#main a").evaluate_all("els => els.map(e => e.getAttribute('href'))")
-    assert links == ["/bd/add.html"], "Add contact (moved, #808), and no link to a page that has not moved"
+    pg.locator("#ct-list .ct-acct").first.wait_for(timeout=15000)
+    expect(pg.locator("main h1")).to_have_text("Contacts")
+    assert "The Contacts page is coming." not in pg.locator("#main").inner_text()
     # This Week was replaced in the history, so Back goes to where the tab was before (here the
     # browser's blank page), never back to /bd/ and its redirect.
     pg.go_back()

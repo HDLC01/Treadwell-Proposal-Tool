@@ -295,6 +295,15 @@
     return d.toLocaleDateString("en-US", o);
   }
 
+  var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  /** "2026-12-31" -> "Dec 31"; "Jan 31, 2027" when the date is not in `today`'s year. The date as
+   *  written (no clock, no time zone), for a day the server stores as a date. "" for nothing. */
+  function fmtMonthDay(iso, today) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ""));
+    if (!m) return "";
+    return MONTHS[+m[2] - 1] + " " + (+m[3]) + (today && m[1] !== String(today).slice(0, 4) ? ", " + m[1] : "");
+  }
+
   /** How far off a date is, in plain words, from `today` (calendar days in Central):
    *  "today", "tomorrow", "in 3 days", "in a week", "in 2 weeks", "in 3 weeks", "in about a
    *  month", "about 3 months", "about a year", "about 2 years". A past date gives "". */
@@ -930,6 +939,147 @@
     return handle;
   }
 
+  // ── unknown calls and the workbook import (#810: Admin's, shared now that Contacts carries them
+  // again; one copy, not one per page) ───────────────────────────────────────────────────────────
+
+  /** A call that matched no contact (GET /api/bd/admin/unmatched-calls) in words: its number
+   *  ("913-555-0199" as fmtPhone shows it, a number that is not a US one as sent, or "Unknown number"), when
+   *  ("Tue, Nov 3, 4:42 PM", Central), how long ("2 min" from a minute up, or "No talk time") and
+   *  which way it went ("Called us" / "We called"). */
+  function callWords(u) {
+    var c = u || {};
+    return {
+      phone: fmtPhone(c.from_e164) || "Unknown number",
+      when: fmtBizDate(c.occurred_at, "short") + ", " + fmtBizTime(c.occurred_at),
+      length: c.duration_s ? Math.max(1, Math.round(c.duration_s / 60)) + " min" : "No talk time",
+      way: c.direction === "in" ? "Called us" : "We called",
+    };
+  }
+
+  /** Asks "Dismiss this call?" and, on yes, dismisses it (POST /api/bd/admin/unmatched-calls/{id}/
+   *  dismiss), `btn` busy meanwhile. Resolves true once the server has dismissed it and false when
+   *  the person kept it; rejects with the server's error, the button no longer busy. */
+  function dismissCall(u, btn) {
+    var Api = window.BDApi;
+    var w = callWords(u);
+    return dialog({
+      title: "Dismiss this call?",
+      text: "The call from " + w.phone + " on " + w.when + " leaves this list for good. It is not logged on any contact.",
+      yes: "Dismiss call",
+      danger: true,
+    }).then(function (yes) {
+      if (!yes) return false;
+      setBusy(btn, true);
+      return Api.post(Api.path("admin", "unmatched-calls", u.id, "dismiss"), {}).then(function () { return true; },
+        function (e) { setBusy(btn, false); throw e; });
+    });
+  }
+
+  // The workbook import, in a dialog: a practice run first (dry_run), then "Import now" only when the
+  // practice run found something to add or change. BD drew it on Contacts; #809 put it on Admin's
+  // Imports while Contacts had not moved, and #810 puts it back on Contacts. Both call this one.
+  var importing = { file: null, dlg: null, opts: null };
+
+  function postImport(file, dry) {
+    var Api = window.BDApi;
+    var fd = new FormData();
+    fd.append("file", file);
+    fd.append("dry_run", dry ? "true" : "false");
+    return Api.post("/api/bd/admin/import", fd).then(function (r) { return r["import"]; });
+  }
+
+  function importProblems(errs) {
+    return errs.map(function (x) {
+      return "<li>" + esc(x.sheet) + ", row " + esc(x.row) + ": " + esc(x.message) + "</li>";
+    }).join("");
+  }
+
+  function importSummary(r) {
+    var el = importing.dlg;
+    if (!el) return;
+    var errs = (r.errors || []).slice(0, 10);
+    // Import now only when the practice run found something to add or change
+    var changes = (Number(r.created) || 0) + (Number(r.updated) || 0) > 0;
+    var body = el.querySelector("#bd-import-body");
+    body.setAttribute("aria-busy", "false");
+    body.innerHTML =
+      '<p class="strong">' + esc(plural(r.rows_read, "contact")) + " read, " +
+      esc(plural(r.possible_duplicates, "possible duplicate")) + ".</p>" +
+      '<dl class="bd-import-kv"><dt>File</dt><dd>' + esc(r.file_name) + "</dd>" +
+      "<dt>Would be added</dt><dd>" + esc(r.created) + "</dd>" +
+      "<dt>Would be updated</dt><dd>" + esc(r.updated) + "</dd>" +
+      "<dt>Already match</dt><dd>" + esc(r.skipped) + "</dd>" +
+      "<dt>Possible duplicates</dt><dd>" + esc(r.possible_duplicates) + "</dd></dl>" +
+      (errs.length ? '<p class="label">Rows with problems</p><ul class="bd-import-errors">' + importProblems(errs) + "</ul>" : "") +
+      '<p class="panel-info">' + icon("info", 18) + "<span>" +
+      (changes ? "This was a practice run. Nothing has been imported yet." : "This was a practice run. Importing this file would change nothing.") +
+      "</span></p>";
+    // Close stays where it is (focus is on it since the dialog opened): Import now is added beside
+    // it, so the redraw never drops focus to the page behind the dialog.
+    if (changes) {
+      el.querySelector("#bd-import-actions").insertAdjacentHTML("beforeend",
+        '<button type="button" class="btn btn-primary" data-act="import-now">Import now</button>');
+    }
+    announce(plural(r.rows_read, "contact") + " read, " + (Number(r.created) || 0) + " would be added, " +
+      (Number(r.updated) || 0) + " would be updated. This was a practice run.");
+  }
+
+  function importNow(btn) {
+    var o = importing.opts || {};
+    if (!importing.file) return;
+    setBusy(btn, true);
+    postImport(importing.file, false).then(function (r) {
+      if (importing.dlg) sheetClose(importing.dlg, "done");
+      toast("Imported: " + r.created + " added, " + r.updated + " updated.", { kind: "ok" });
+      if (typeof o.onRun === "function") o.onRun(r);
+      if (typeof o.onImported === "function") o.onImported(r);
+    }, function (e) {
+      setBusy(btn, false);
+      toast(errText(e), { kind: "error" });
+    });
+  }
+
+  /** Opens the import dialog for `file` and sends its practice run. opts: returnFocus (a function
+   *  giving the element focus goes back to when the dialog closes), onRun(r) after each run the
+   *  server answered (the practice run is a past import too), onImported(r) after the real one. */
+  function importWorkbook(file, opts) {
+    var o = opts || {};
+    importing.file = file;
+    importing.opts = o;
+    var el = document.createElement("div");
+    el.className = "dialog bd-import-dlg";
+    el.setAttribute("aria-labelledby", "bd-import-title");
+    el.innerHTML = '<h2 class="dialog-title" id="bd-import-title">Import workbook</h2>' +
+      '<div class="bd-import-body" id="bd-import-body" aria-busy="true"><p class="bd-import-wait"><span class="spinner" aria-hidden="true"></span> Reading ' +
+      esc(file.name) + "...</p></div>" +
+      '<div class="dialog-actions" id="bd-import-actions"><button type="button" class="btn" data-act="close">Close</button></div>';
+    el.addEventListener("click", function (e) {
+      var b = e.target.closest && e.target.closest("[data-act]");
+      if (!b) return;
+      if (b.getAttribute("data-act") === "close") sheetClose(el, "close");
+      else if (b.getAttribute("data-act") === "import-now") importNow(b);
+    });
+    importing.dlg = el;
+    sheetOpen(el, {
+      initialFocus: '[data-act="close"]',
+      returnFocus: o.returnFocus,
+      onClose: function () {
+        if (importing.dlg === el) importing.dlg = null;
+        setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 220);
+      },
+    });
+    postImport(file, true).then(function (r) {
+      if (importing.dlg !== el) return;
+      importSummary(r);
+      if (typeof o.onRun === "function") o.onRun(r);
+    }, function (e) {
+      if (importing.dlg !== el) return;
+      var body = el.querySelector("#bd-import-body");
+      body.setAttribute("aria-busy", "false");
+      body.innerHTML = '<div class="error-box" role="alert">' + esc(errText(e)) + "</div>";
+    });
+  }
+
   window.BD = {
     BIZ_TZ: BIZ_TZ,
     esc: esc,
@@ -959,6 +1109,7 @@
     fmtCount: fmtCount,
     firstName: firstName,
     fmtDay: fmtDay,
+    fmtMonthDay: fmtMonthDay,
     fmtRel: fmtRel,
     chipDate: chipDate,
     fmtDuration: fmtDuration,
@@ -985,5 +1136,8 @@
     closeMenu: closeMenu,
     toast: toast,
     announce: announce,
+    callWords: callWords,
+    dismissCall: dismissCall,
+    importWorkbook: importWorkbook,
   };
 })();

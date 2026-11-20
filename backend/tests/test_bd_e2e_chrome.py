@@ -45,12 +45,12 @@ WEEK_PEOPLE = [
     ("emery.stoll@example.com", "Emery", CHOOSE),
     ("frankie.oduya@example.com", "Frankie", CHOOSE),
 ]
-# The sections each of them sees: Add contact is not the manager's (#808); Potential BD Contacts is
-# everyone's, Analytics the manager's and the admins', Admin the admins' and the salesperson's, who
-# imports from it until Contacts moves (#809).
-ADMINS = ["This Week", "Add contact", "Potential BD Contacts", "Analytics", "Admin"]
-SECTIONS = {"avery.quill@example.com": ["This Week", "Add contact", "Potential BD Contacts", "Admin"],
-            "devon.hale@example.com": ["This Week", "Potential BD Contacts", "Analytics"],
+# The sections each of them sees: Contacts is everyone's (#810); Add contact is not the manager's
+# (#808); Potential BD Contacts is everyone's, Analytics the manager's and the admins', Admin the admins'
+# alone, as BD's rail had it (#810: the salesperson's import is back on Contacts).
+ADMINS = ["This Week", "Contacts", "Add contact", "Potential BD Contacts", "Analytics", "Admin"]
+SECTIONS = {"avery.quill@example.com": ["This Week", "Contacts", "Add contact", "Potential BD Contacts"],
+            "devon.hale@example.com": ["This Week", "Contacts", "Potential BD Contacts", "Analytics"],
             "emery.stoll@example.com": ADMINS, "frankie.oduya@example.com": ADMINS}
 SUPER = "frankie.oduya@example.com"
 ASSISTANT = "casey.moret@example.com"
@@ -124,16 +124,17 @@ def test_on_the_bd_home_the_bd_row_is_the_one_lit_row_and_its_group_is_open(env,
 
 def test_the_assistant_sees_add_contact_and_it_works(env):
     """This Week sends her to her BD home, Contacts; there, the BD CRM row is lit and her group is
-    open with her sections, Add contact (#808), Potential BD Contacts and Admin (#809; Contacts joins
-    them when its page moves). Add contact opens the form."""
+    open with BD's rail for her: Contacts (lit), Add contact and Potential BD Contacts, no Admin (#810).
+    Add contact opens the form."""
     p = _page(env, ASSISTANT)
     try:
         page = p.open_signed_in("/bd/")
         page.wait_for_url(re.compile(r".*/bd/contacts\.html(\?.*)?$"), timeout=10000)
         page.wait_for_selector("#tw-bd-chev")
         _wait_sections(page)
-        assert _sections(page) == ["Add contact", "Potential BD Contacts", "Admin"]
-        assert page.locator('#tw-bd-sections [aria-current="page"]').count() == 0
+        assert _sections(page) == ["Contacts", "Add contact", "Potential BD Contacts"]
+        current = page.locator('#tw-bd-sections [aria-current="page"]')
+        assert current.count() == 1 and current.get_attribute("href") == "/bd/contacts.html"
         lit = page.locator("#tw-sidebar .tw-nav-item.active")
         assert lit.count() == 1 and lit.get_attribute("href") == "/bd/"
         page.locator('#tw-bd-sections a[href="/bd/add.html"]').click()

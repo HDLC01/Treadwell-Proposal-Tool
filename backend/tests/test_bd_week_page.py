@@ -275,3 +275,51 @@ def test_a_task_names_its_contact_with_a_link_to_the_contact_page(tmp_path):
     assert links and set(links) == {"/bd/contact.html?id=21&amp;from=week"}, links
     assert "Open Dana Whitlow" in html
 
+
+
+# ── a list made only to pin a maintenance follow-up (#810) ────────────────────────────────────────
+def week_with_a_pin_only_list(bd_call=False):
+    """Dana's week, plus a list of its own (batch 210, ten_more) the server made when a company became a
+    maintenance account and Hal's follow-up had to be pinned (#810): it holds that pin alone. With
+    `bd_call`, Give Me 10 More's list (211) holds one BD call too."""
+    out = week_with_dana()
+    w = out["body"]["week"]
+    pin_list = {"id": 210, "kind": "ten_more", "owner": {"id": 1, "name": "Avery Quill"}, "week_start": "2026-11-02",
+                "generated_at": "2026-11-04T09:00:00-06:00"}
+    w["batches"] = [w["batch"], pin_list]
+    w["tasks"] = [{"id": 320, "batch_id": 210, "kind": "maintenance", "status": "open", "score": 0,
+                   "reason": "Maintenance follow-up is due.", "reasons": ["Maintenance follow-up is due"],
+                   "done_at": None, "snoozed_until": None,
+                   "contact": {"id": 30, "name": "Hal Brecken", "title": "", "phone": "785-555-0110",
+                               "phone_e164": "+17855550110", "company": {"id": 17, "name": "Kaw Valley Cold Storage"},
+                               "category": "maintenance", "importance": 1, "confirmed": False}}] + w["tasks"]
+    if bd_call:
+        w["batches"].append({"id": 211, "kind": "ten_more", "owner": {"id": 1, "name": "Avery Quill"},
+                             "week_start": "2026-11-02", "generated_at": "2026-11-04T10:00:00-06:00"})
+        w["tasks"].append({"id": 321, "batch_id": 211, "kind": "new", "status": "open", "score": 40,
+                           "reason": "Never reached.", "reasons": ["Never reached"], "done_at": None,
+                           "snoozed_until": None,
+                           "contact": {"id": 32, "name": "Wes Calder", "title": "", "phone": "913-555-0112",
+                                       "phone_e164": "+19135550112", "company": {"id": 18, "name": "Osage Plains Brewing"},
+                                       "category": "bd", "importance": 1, "confirmed": False}})
+    return out
+
+
+def test_a_list_holding_only_a_pinned_follow_up_is_not_an_extra_list(tmp_path):
+    """Stage 1's open item (a): the pin shows under Due now (here as Next up), and there is no
+    "0 more (to get ahead)" list for the list the server made to hold it."""
+    out = run(tmp_path, me("Avery Quill", "salesperson"),
+              responses={"GET /api/bd/week": week_with_a_pin_only_list(), "GET /api/bd/settings": settings()}, name="pin")
+    text = out["els"]["lists"]["text"]
+    assert "Hal Brecken" in text
+    assert "more (to get ahead)" not in text, text[:600]
+
+
+def test_an_extra_list_with_a_bd_call_is_still_numbered_from_one(tmp_path):
+    """Give Me 10 More's list after a pin-only one: "1 more (to get ahead)", not "(2)" of two."""
+    out = run(tmp_path, me("Avery Quill", "salesperson"),
+              responses={"GET /api/bd/week": week_with_a_pin_only_list(bd_call=True), "GET /api/bd/settings": settings()},
+              name="pin-and-extra")
+    text = out["els"]["lists"]["text"]
+    assert "1 more (to get ahead)" in text and "(to get ahead) (" not in text, text[:800]
+    assert 'data-batch="211"' in out["els"]["lists"]["html"] and 'data-batch="210"' not in out["els"]["lists"]["html"]

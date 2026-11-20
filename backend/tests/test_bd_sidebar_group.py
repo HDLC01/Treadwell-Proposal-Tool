@@ -8,7 +8,7 @@ sidebar (and so in the phone drawer, and under the sidebar's Hide menu):
     remembered (tw_bd_open, like the sidebar's own tw_nav_open), and never on a phone;
   * a section shows only when BD's can() map (from /api/bd/me) allows it for the person's BD role,
     and only once its page has moved (This Week, the BD home page, and Add contact, #808; Potential BD
-    Contacts, Analytics and Admin, #809);
+    Contacts, Analytics and Admin, #809; Contacts, #810);
   * the current section is lit by the page's full path;
   * until BD answers, an open group says it is loading (a polite live region), and a failed answer
     is said in the same words the BD home page uses (TWAuth.bdFailure, the one reader).
@@ -114,7 +114,7 @@ def test_the_chevron_opens_and_shuts_it_and_desktop_remembers(tmp_path):
     assert shut["expanded"] == "false" and shut["hidden"] is True
     assert opened["expanded"] == "true" and opened["hidden"] is False
     assert opened["storage"].get("tw_bd_open") == "1"
-    assert [s["href"] for s in opened["sections"]] == ["/bd/", "/bd/add.html", "/bd/review.html", "/bd/admin.html"]
+    assert [s["href"] for s in opened["sections"]] == SECTIONS_BY_ROLE["salesperson"]
     assert shut_again["expanded"] == "false" and shut_again["hidden"] is True
     assert shut_again["storage"].get("tw_bd_open") == "0"
     assert len(bd_fetches(out)) == 1, "BD is asked once per page, not on every open"
@@ -123,7 +123,7 @@ def test_the_chevron_opens_and_shuts_it_and_desktop_remembers(tmp_path):
 def test_desktop_reopens_it_where_it_was_left_open(tmp_path):
     out = run(tmp_path, "/projects.html", storage={"tw_bd_open": "1"})
     assert out["states"][0]["expanded"] == "true"
-    assert [s["href"] for s in out["states"][0]["sections"]] == ["/bd/", "/bd/add.html", "/bd/review.html", "/bd/admin.html"]
+    assert [s["href"] for s in out["states"][0]["sections"]] == SECTIONS_BY_ROLE["salesperson"]
 
 
 def test_a_phone_never_reads_or_writes_the_remembered_choice(tmp_path):
@@ -151,25 +151,26 @@ def test_tapping_a_section_in_the_phone_drawer_shuts_the_drawer(tmp_path):
 
 # ── which sections show ──────────────────────────────────────────────────────
 # This Week (the BD home page, #807), Add contact (#808), Potential BD Contacts, Analytics and Admin
-# (#809) have moved. Expected by hand from BD's own rules, not by running a rule here:
+# (#809) and Contacts (#810) have moved. Expected by hand from BD's own rules, not by running a rule here:
 #   This Week              the weekly list's (salesperson, manager, admin, super admin);
+#   Contacts               every BD role (BD's rail showed it to all four; the assistant's BD home);
 #   Add contact            whoever may add a contact (POST /api/bd/contacts: salesperson, assistant,
 #                          admin, super admin);
 #   Potential BD Contacts  every BD role (BD's rail showed it to all four; GET /api/bd/review/candidates
 #                          lets every role in);
 #   Analytics              the manager and the admins (GET /api/bd/analytics);
-#   Admin                  the assistant and the admins (BD's page gate, admin_area: her unmatched calls
-#                          and import history), and the salesperson too, who imports a workbook
-#                          (can.import) and, until the Contacts page moves, imports from Admin's Imports.
+#   Admin                  the admins alone, as BD's rail had it (#810). The page still opens for the
+#                          assistant (BD's page gate, admin_area), from the Attach links on Contacts.
 SECTIONS_BY_ROLE = {
-    "salesperson": ["/bd/", "/bd/add.html", "/bd/review.html", "/bd/admin.html"],
-    "assistant": ["/bd/add.html", "/bd/review.html", "/bd/admin.html"],
-    "manager": ["/bd/", "/bd/review.html", "/bd/analytics.html"],
-    "admin": ["/bd/", "/bd/add.html", "/bd/review.html", "/bd/analytics.html", "/bd/admin.html"],
-    "super_admin": ["/bd/", "/bd/add.html", "/bd/review.html", "/bd/analytics.html", "/bd/admin.html"],
+    "salesperson": ["/bd/", "/bd/contacts.html", "/bd/add.html", "/bd/review.html"],
+    "assistant": ["/bd/contacts.html", "/bd/add.html", "/bd/review.html"],
+    "manager": ["/bd/", "/bd/contacts.html", "/bd/review.html", "/bd/analytics.html"],
+    "admin": ["/bd/", "/bd/contacts.html", "/bd/add.html", "/bd/review.html", "/bd/analytics.html", "/bd/admin.html"],
+    "super_admin": ["/bd/", "/bd/contacts.html", "/bd/add.html", "/bd/review.html", "/bd/analytics.html",
+                    "/bd/admin.html"],
 }
-LABELS = {"/bd/": "This Week", "/bd/add.html": "Add contact", "/bd/review.html": "Potential BD Contacts",
-          "/bd/analytics.html": "Analytics", "/bd/admin.html": "Admin"}
+LABELS = {"/bd/": "This Week", "/bd/contacts.html": "Contacts", "/bd/add.html": "Add contact",
+          "/bd/review.html": "Potential BD Contacts", "/bd/analytics.html": "Analytics", "/bd/admin.html": "Admin"}
 
 
 @pytest.mark.parametrize("role", list(SECTIONS_BY_ROLE))
@@ -182,14 +183,16 @@ def test_the_sections_are_exactly_the_ones_can_allows(tmp_path, role):
 
 
 def test_the_assistant_sees_her_sections_and_no_note(tmp_path):
-    """Add contact, Potential BD Contacts and Admin: the group says nothing about there being none."""
+    """Contacts (her BD home, lit), Add contact and Potential BD Contacts, BD's rail for her: no Admin."""
     s = run(tmp_path, "/bd/contacts.html", bd=bd_me("assistant"))["states"][0]
-    assert s["sections"] == [{"href": h, "label": LABELS[h], "active": False, "current": False}
-                             for h in ("/bd/add.html", "/bd/review.html", "/bd/admin.html")]
+    assert s["sections"] == [{"href": h, "label": LABELS[h], "active": h == "/bd/contacts.html",
+                              "current": h == "/bd/contacts.html"}
+                             for h in ("/bd/contacts.html", "/bd/add.html", "/bd/review.html")]
     assert not s["note"], s["note"]
 
 
-@pytest.mark.parametrize("page", ["/bd/add.html", "/bd/review.html", "/bd/analytics.html", "/bd/admin.html"])
+@pytest.mark.parametrize("page", ["/bd/contacts.html", "/bd/add.html", "/bd/review.html", "/bd/analytics.html",
+                                  "/bd/admin.html"])
 def test_each_section_is_lit_on_its_own_page_and_no_other_is(tmp_path, page):
     s = run(tmp_path, page, bd=bd_me("admin"), name=page.strip("/").replace("/", "_"))["states"][0]
     assert s["sections"] == [{"href": h, "label": LABELS[h], "active": h == page, "current": h == page}
@@ -199,7 +202,7 @@ def test_each_section_is_lit_on_its_own_page_and_no_other_is(tmp_path, page):
 def test_one_contact_lights_no_section(tmp_path):
     # one contact is not a section: on its page nothing in the group is lit, and the BD CRM row is
     s = run(tmp_path, "/bd/contact.html", bd=bd_me("admin"), name="contact")["states"][0]
-    assert [x["active"] for x in s["sections"]] == [False] * 5
+    assert [x["active"] for x in s["sections"]] == [False] * 6
 
 
 def test_the_tools_own_admin_and_analytics_pages_light_no_bd_section(tmp_path):

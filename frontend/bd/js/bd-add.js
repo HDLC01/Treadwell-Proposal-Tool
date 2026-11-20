@@ -23,9 +23,9 @@
  *   - The owner list starts on the person adding when they are one of the salespeople it lists (the
  *     list of BD logins, GET /api/bd/users), else on the first salesperson. BD read the adder's role
  *     name for that; the page reads no role name of the person using it.
- *   - NO LINKS TO PAGES THAT HAVE NOT MOVED. BD's "Contacts" back link and Cancel went to the
- *     Contacts page, which has not moved: there is no back link, and Cancel goes to /bd/ (This Week,
- *     or an assistant's BD home). "Open" goes to the contact page, a /bd/ page, through BD.safeHref.
+ *   - BD's "Contacts" back link and Cancel go to the Contacts page again (#810: it has moved; #808 had
+ *     no back link and sent Cancel to /bd/). "Open" goes to the contact page, a /bd/ page, through
+ *     BD.safeHref.
  *   - Toasts are BD.toast's; every route is under /api/bd/.
  *
  * Routes (docs/bd/api-contract.md): GET /api/bd/companies?q= (the type-ahead),
@@ -108,7 +108,7 @@
   function formHtml() {
     var freq = defaultFreq();
     return '<div class="add-wrap">' +
-      '<p class="eyebrow">BD CRM</p>' +
+      '<a class="back-link add-back" href="/bd/contacts.html">' + ico("arrow-left", 18) + "<span>Contacts</span></a>" +
       '<h1 class="page-title add-title">Add contact</h1>' +
       '<p class="page-sub add-sub">Pick the company first. Several people at one company share it.</p>' +
       '<form id="add-form" class="add-form" novalidate autocomplete="off">' +
@@ -167,7 +167,7 @@
       "</div></section>" +
       '<div class="wrap-row add-actions">' +
       '<button type="submit" class="btn btn-primary" id="add-submit">' + ico("plus", 18) + "<span>Add contact</span></button>" +
-      '<a class="btn btn-tertiary" href="/bd/">Cancel</a></div>' +
+      '<a class="btn btn-tertiary" href="/bd/contacts.html">Cancel</a></div>' +
       "</form></div>";
   }
 
@@ -733,6 +733,8 @@
 
   function render() {
     var root = $("add-root");
+    // The form is here: the region is no longer busy (#810's page sweep found it left busy).
+    root.removeAttribute("aria-busy");
     root.innerHTML = formHtml();
     syncAccount();
     wire();
@@ -780,6 +782,7 @@
   }).catch(function (e) {
     var root = $("add-root");
     if (root) {
+      root.removeAttribute("aria-busy");
       root.innerHTML = '<div class="error-box" role="alert"><p>' + esc(errText(e)) + "</p>" +
         '<button type="button" class="btn" id="add-retry">Try again</button></div>';
       $("add-retry").addEventListener("click", function () { location.reload(); });

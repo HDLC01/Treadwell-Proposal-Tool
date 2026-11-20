@@ -19,6 +19,9 @@ Objects and the functions that make them:
     ContactCompact     contact_compact(row)          contacts_summary row
     (contact ref)      contact_ref(row)              {"id", "name", "company": {id, name}}
     (dup match)        duplicate_match(row, reason)  {"contact_id","name","company","city","reason"}
+    Account            account(row, category, ...)   one Contacts-page tab row (bd/routers/accounts.py)
+    AccountPerson      account_person(row)           contacts_summary row
+    (company move)     account_move(...)             what POST /api/bd/contacts/accounts/{id}/move answers
     Interaction        interaction(row)              INTERACTION_SELECT row
     TaskBatch          task_batch(row)               BATCH_SELECT row
     Task               task(row, contact)            tasks row + an already-serialised ContactCompact
@@ -43,6 +46,7 @@ archived (mock-data.js contacts have no such key; the mock adds it on archive).
 """
 from __future__ import annotations
 
+import datetime as _dt
 import decimal
 from collections.abc import Mapping
 from typing import Any
@@ -209,6 +213,66 @@ def duplicate_match(row: Row, reason: str) -> dict:
     """One `possible_duplicates` / GET /api/contacts/duplicates item, from a contacts_summary row."""
     return {"contact_id": row["id"], "name": row["name"], "company": row["company_name"],
             "city": row.get("city"), "reason": reason}
+
+
+# ── BD accounts (the Contacts page, #810) ────────────────────────────────────────────────────
+def account_person(row: Row) -> dict:
+    """One person under an account row, from a contacts_summary row: who they are, how to reach
+    them, and what their status pill and cadence pill read (BD.statusPill)."""
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "title": row.get("title"),
+        "phone": row.get("phone"),
+        "phone_e164": row.get("phone_e164"),
+        "email": row.get("email"),
+        "category": row["category"],
+        "confirmed": bool(row["confirmed"]),
+        "importance": int(row["importance"]),
+        "owner": user_ref(row.get("owner_id"), row.get("owner_name")) if row.get("owner_id") is not None else None,
+        "duplicate_of": _duplicate_of(row),
+        "lead_source": row.get("lead_source"),
+        "last_live_at": ts(row.get("last_live_at")),
+        "last_followup_at": ts(row.get("last_followup_at")),
+        "cadence_status": row["cadence_status"],
+        "cadence": row.get("cadence"),
+        "cadence_source": row.get("cadence_source"),
+        "cadence_override_until": iso_date(row.get("cadence_override_until")),
+        "maintenance_due": bool(row.get("maintenance_due")),
+        "maintenance_due_date": iso_date(row.get("maintenance_due_date")),
+    }
+
+
+def account(row: Row, category: str, owner: dict | None, other_owners: int, people: list) -> dict:
+    """An account row of one tab (`category`): the company, its people on that tab, the owner,
+    how many other people own someone there ("+N") and the last live talk with anyone there."""
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "city": row.get("city"),
+        "industry": row.get("industry"),
+        "category": category,
+        "people_count": len(people),
+        "owner": owner,
+        "other_owners": int(other_owners),
+        "last_live_at": ts(row.get("last_live_at")),
+        "people": [account_person(p) for p in people],
+    }
+
+
+def account_move(move_id: Any, company_row: Row, to: str, people: int, calls_off: int, pinned: int,
+                 at: Any, undo_seconds: int) -> dict:
+    """What a company move answers: its id (for Undo), the company, where it went, how many people,
+    how many calls came off this week's lists, how many follow-ups were pinned, and until when Undo works."""
+    return {
+        "id": move_id,
+        "company": company_ref(company_row["id"], company_row["name"]),
+        "to": to,
+        "people": int(people),
+        "calls_off": int(calls_off),
+        "pinned": int(pinned),
+        "undo_until": ts(at + _dt.timedelta(seconds=int(undo_seconds))),
+    }
 
 
 # ── interactions ─────────────────────────────────────────────────────────────────────────────

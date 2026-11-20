@@ -48,6 +48,8 @@ savepoint when the caller already has one; run_due builds each owner in its own,
     build_batch(conn, owner, today, kind="friday", week_start=None, force=False, settings=None)
     ten_more(conn, owner, today, n=10)
     last_friday_week(conn, owner, up_to=None) -> date | None
+    lock_lists(conn, contact_ids, today, task_ids=()) -> [owner id]   another writer of these lists
+    pin_due_maintenance(conn, contact_ids, today) -> (task ids, batch ids)   a company made maintenance
     run_due(conn, now=None, commit=False, failed=None) -> [result]   what the worker calls
 
 WHOSE WEEK (the routes' owner rules: This Week's routes and the admin's run share them)
@@ -284,6 +286,24 @@ def _lock_owner(conn: Any, owner_id: Any) -> None:
     conn.execute("select pg_advisory_xact_lock(%s, hashtext(%s))", (_LOCK_KEY, str(owner_id)))
 
 
+def lock_lists(conn: Any, contact_ids: Any, today: Any, task_ids: Any = ()) -> list:
+    """For a writer of people's tasks outside the builds (a company move and its Undo,
+    bd/routers/accounts.py): takes the builds' per-owner lock of every list these people's tasks may
+    be on, lowest owner id first, until the transaction ends. Those are the people's owners (a build
+    picks only its owner's people), the owners of lists holding an open task of theirs this week or
+    later, and the owners of lists holding `task_ids`. Take it before changing a person or a task: a
+    build takes it before its rollover changes tasks, and reads the people after it. Returns the ids."""
+    rows = conn.execute(
+        "select owner_id from contacts where id = any(%(c)s) and owner_id is not null"
+        " union select b.owner_id from tasks t join task_batches b on b.id = t.batch_id"
+        " where (t.contact_id = any(%(c)s) and t.status = 'open' and b.week_start >= %(ws)s) or t.id = any(%(t)s)",
+        {"c": list(contact_ids), "t": list(task_ids), "ws": bizdate.week_start(_day(today))}).fetchall()
+    owners = sorted({int(r["owner_id"]) for r in rows})
+    for owner_id in owners:
+        _lock_owner(conn, owner_id)
+    return owners
+
+
 def load_owned(conn: Any, owner: Any, today: Any) -> list:
     """Every contact the owner owns and has not archived, as contacts_summary rows as of `today`
     (api.js ownedBy). Call inside _transaction, or through rank()."""
@@ -313,19 +333,34 @@ def rank(conn: Any, owner: Any, today: Any, facts_by_id: Any = None) -> list:
     return rank_contacts(rows, facts_by_id, day)
 
 
+def _insert_tasks(conn: Any, batch_id: Any, picks: list[dict]) -> list:
+    """The picks' tasks on batch `batch_id`, in pick order. Returns their ids, in that order."""
+    if not picks:
+        return []
+    ids = []
+    with conn.cursor() as cur:
+        cur.executemany(
+            "insert into tasks (batch_id, contact_id, kind, reason, reasons, score)"
+            " values (%s, %s, %s, %s, %s, %s) returning id",
+            [(batch_id, p["contact_id"], p["kind"], p["reason"], list(p["reasons"]), p["score"]) for p in picks],
+            returning=True)
+        while True:
+            ids.append(cur.fetchone()["id"])
+            if not cur.nextset():
+                break
+    return ids
+
+
+def _new_batch(conn: Any, owner_id: Any, week_start: Any, kind: str) -> int:
+    return conn.execute("insert into task_batches (owner_id, week_start, kind) values (%s, %s, %s) returning id",
+                        (owner_id, week_start, kind)).fetchone()["id"]
+
+
 def _insert_batch(conn: Any, owner_id: Any, week_start: Any, kind: str, picks: list[dict]) -> Any:
     """api.js addBatch: the batch, then its tasks in pick order. Returns the BATCH_SELECT row."""
-    row = conn.execute(
-        "insert into task_batches (owner_id, week_start, kind) values (%s, %s, %s) returning id",
-        (owner_id, week_start, kind)).fetchone()
-    if picks:
-        with conn.cursor() as cur:
-            cur.executemany(
-                "insert into tasks (batch_id, contact_id, kind, reason, reasons, score)"
-                " values (%s, %s, %s, %s, %s, %s)",
-                [(row["id"], p["contact_id"], p["kind"], p["reason"], list(p["reasons"]), p["score"])
-                 for p in picks])
-    return conn.execute(serialize.BATCH_SELECT + " where b.id = %s", (row["id"],)).fetchone()
+    batch_id = _new_batch(conn, owner_id, week_start, kind)
+    _insert_tasks(conn, batch_id, picks)
+    return conn.execute(serialize.BATCH_SELECT + " where b.id = %s", (batch_id,)).fetchone()
 
 
 def last_friday_week(conn: Any, owner: Any, up_to: Any = None) -> Any:
@@ -412,6 +447,54 @@ def ten_more(conn: Any, owner: Any, today: Any, n: Any = TEN_MORE_COUNT) -> dict
             raise NothingLeft(owner_id, ws)
         batch = _insert_batch(conn, owner_id, ws, "ten_more", picks)
     return {"batch": batch, "picks": picks, "tasks_created": len(picks), "snoozed": 0, "replaced": []}
+
+
+def pin_due_maintenance(conn: Any, contact_ids: Any, today: Any) -> tuple:
+    """The pinned maintenance follow-up, at once, for each of these people whose follow-up is due by
+    the Friday batch's own rules (rank_contacts), on their owner's list, when the owner is an active
+    salesperson (only a salesperson has a weekly list). A company made a maintenance account calls it
+    (bd/routers/accounts.py). Takes each owner's lock first.
+
+    The list is the one the owner works now: next week's once the Friday run has made its live Friday
+    list (the run has already closed this week's), else this week's. A pin goes on that week's live
+    Friday list when the person has no task there; otherwise (their BD call that just came off is on
+    it), or when there is no Friday list, on a small list of its own for that week: a "ten_more"
+    batch holding only pinned follow-ups, which are never part of the 10 (This Week shows the pin
+    under "Due now", not as "more to get ahead"). Returns (task ids, batch ids made)."""
+    day = _day(today)
+    rows = conn.execute(
+        "select cs.* from contacts_summary cs join users u on u.id = cs.owner_id where cs.id = any(%s)"
+        " and cs.archived_at is null and u.role = 'salesperson' and u.active order by cs.id",
+        (list(contact_ids),)).fetchall()
+    by_owner: dict = {}
+    for r in rows:
+        by_owner.setdefault(int(r["owner_id"]), []).append(r)
+    this_week = bizdate.week_start(day)
+    next_week = bizdate.add_days(this_week, 7)
+    pins, batches = [], []
+    for owner_id in sorted(by_owner):
+        _lock_owner(conn, owner_id)
+        ws = next_week if last_friday_week(conn, owner_id, up_to=next_week) == next_week else this_week
+        facts = load_facts(conn, owner_id, ws, any_status=False)
+        picks = [p for p in rank_contacts(by_owner[owner_id], facts, day) if p["kind"] == "maintenance"]
+        if not picks:
+            continue
+        friday = conn.execute("select id from task_batches where owner_id = %s and week_start = %s"
+                              " and kind = 'friday' and replaced_at is null order by id desc limit 1",
+                              (owner_id, ws)).fetchone()
+        on_friday: set = set()
+        if friday is not None:
+            on_friday = {r["contact_id"] for r in conn.execute(
+                "select contact_id from tasks where batch_id = %s", (friday["id"],)).fetchall()}
+        to_friday = [p for p in picks if friday is not None and p["contact_id"] not in on_friday]
+        own = [p for p in picks if p not in to_friday]
+        if to_friday:
+            pins += _insert_tasks(conn, friday["id"], to_friday)
+        if own:
+            batch = _new_batch(conn, owner_id, ws, "ten_more")
+            batches.append(batch)
+            pins += _insert_tasks(conn, batch, own)
+    return pins, batches
 
 
 def run_due(conn: Any, now: Any = None, commit: bool = False, failed: list | None = None) -> list:

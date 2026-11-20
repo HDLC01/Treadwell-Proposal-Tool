@@ -317,7 +317,10 @@ A task is one slot in a weekly 10. **Tasks have no due date and can never be ove
   week), not on Monday. `done` tasks never change.
 
 TaskBatch: `{ "id": 41, "kind": "friday", "owner": {"id": 1, "name": "Troy"}, "week_start": "2026-11-02", "generated_at": "2026-10-30T16:00:00-05:00" }`.
-`kind`: `friday` | `ten_more`.
+`kind`: `friday` | `ten_more`. A `ten_more` batch is normally a "Give Me 10 More" list. Since #810 a
+company made a maintenance account can also make one that holds **only pinned `maintenance` tasks**
+(see `POST /api/bd/contacts/accounts/{id}/move`): it is not a "Give Me 10 More" list, holds no BD
+call, and This Week shows its tasks under "Due now", never as "N more (to get ahead)".
 
 How a batch is filled (not AI; `BDCore.rankContacts` / `pickWeekly` / `pickNext`, ported to
 `backend/weekly.py`): every contact the salesperson owns and has not archived is scored; the ones
@@ -371,8 +374,11 @@ What the This Week page draws.
 ```
 
 - `batch` is the latest batch this week; `batches` is every batch this week (the Friday one, then each
-  "Give Me 10 More"). `tasks` holds the tasks of **all** of them in that order (the example leaves it
-  empty to keep it short; it holds Task objects).
+  `ten_more`: a "Give Me 10 More", or a list made by a company move that holds only pinned maintenance
+  follow-ups). `batch` can therefore be such a pin-only list; a page that wants the Friday list or the
+  last "Give Me 10 More" looks in `batches` by `kind` and by whether a batch holds a BD task. `tasks`
+  holds the tasks of **all** of them in that order (the example leaves it empty to keep it short; it
+  holds Task objects).
 - `done_count`/`total` are the **live Friday batch's business-development tasks only** (the latest
   Friday batch of the week, leaving out its `maintenance` tasks; one a forced re-run replaced is still
   listed but not counted): the headline "did I do my 10?". Asking for more never makes the 10 look
@@ -629,7 +635,7 @@ BD route serves that path with another method.
   "user": { "id": 1, "name": "Avery Quill", "email": "avery.quill@example.com", "role": "salesperson", "active": true, "last_seen_at": "2026-11-04T08:12:00-06:00" },
   "can": { "send": true, "analytics": false, "admin": false, "admin_area": false, "import": true, "run_batch": false, "week": true, "pick_owner": false,
            "add_contact": true, "edit_contact": true, "clear_duplicate": false, "cadence": true, "manage_entries": false,
-           "manage_admins": false },
+           "manage_admins": false, "move_company": true },
   "today": "2026-11-04",
   "timezone": "America/Chicago"
 }
@@ -637,13 +643,13 @@ BD route serves that path with another method.
 
 `can` per BD role:
 
-| Role | send | analytics | admin | admin_area | import | run_batch | week | pick_owner | add_contact | edit_contact | clear_duplicate | cadence | manage_entries | manage_admins |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| salesperson | yes | | | | yes | | yes | | yes | yes | | yes | | |
-| assistant | | | | yes | yes | | | | yes | yes | yes | yes | | |
-| manager | | yes | | | | | yes | yes | | | | yes | | |
-| admin | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | |
-| super_admin | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
+| Role | send | analytics | admin | admin_area | import | run_batch | week | pick_owner | add_contact | edit_contact | clear_duplicate | cadence | manage_entries | manage_admins | move_company |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| salesperson | yes | | | | yes | | yes | | yes | yes | | yes | | | yes |
+| assistant | | | | yes | yes | | | | yes | yes | yes | yes | | | |
+| manager | | yes | | | | | yes | yes | | | | yes | | | yes |
+| admin | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | | yes |
+| super_admin | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
 
 `pick_owner`: may look at any salesperson's week (`GET /api/bd/week?owner=`); This Week shows the
 "Whose week?" picker. A salesperson sees only their own week. This Week and the contact page show
@@ -666,12 +672,25 @@ against its route, person by person):
   Each logged entry's Delete, and its Edit when it is not this person's own.
 
 BD's Admin page (#809) reads `admin` (People, the Friday list, goals, pick lists, the phone status),
-`admin_area` (the unmatched calls), `import` (the workbook import and past imports) and one more
-(tests/test_bd_admin_roles.py checks each key against its route, person by person):
+`admin_area` (the page itself, BD's page gate, and the unmatched calls), `import` (the workbook import and
+past imports, for whoever the page opens for) and one more (tests/test_bd_admin_roles.py checks each key
+against its route, person by person). The sidebar's Admin section is `admin`'s alone, as BD's rail had it;
+the assistant opens the page from the Contacts page's "Attach to a contact" links (#810):
 
 - `manage_admins`: `POST /api/bd/admin/users` with an admin role, and `PATCH /api/bd/admin/users/{id}`
   of an admin's login or to an admin role (Q29, the super admin alone). The People table offers the
   admin roles, and unlocks an admin's row, only to this person; a plain admin's locked row says why.
+
+The Contacts page (#810) reads `import` (Import: the workbook import, BD's practice run first),
+`add_contact` (Add contact, and "Add someone here" in an opened account), `admin_area` (To tidy this
+Friday with the unknown calls, and "Past imports" in the Import menu, a link to the Admin page, which
+opens for exactly these people), `clear_duplicate` (the Possible duplicates chip), `week` without
+`pick_owner` (a salesperson working their own list: BD's chips and sorts for them, with no "Last live
+talk" sort) and one more (tests/test_bd_accounts_roles.py checks it against its route, person by person):
+
+- `move_company`: `POST /api/bd/contacts/accounts/{id}/move` and undoing your own move (Q5: salesperson,
+  manager, admins; never the assistant). A company row's "..." menu offers **Make maintenance account**
+  or **Move back to BD** only to this person.
 
 #### `GET /api/bd/settings` (any BD role)
 
@@ -890,6 +909,136 @@ characters: 400 `"Keep this to 200 characters or fewer."`) or `restored` event i
 ```json
 { "ok": true, "contact": { "id": 21, "archived_at": "2026-11-04T10:30:00-06:00" } }
 ```
+
+### BD accounts (#810)
+
+The Contacts page lists **BD accounts**: the `companies` rows, under the page's name for them (the table
+keeps its name; nothing is reshaped, and every contact still has exactly one company). A person is on the
+**BD** tab or the **Maintenance** tab by their own `category`, so an account is on a tab when at least one
+of its people who is not archived is (an account holding only maintenance people is not on the BD tab).
+The paths sit under `/api/bd/contacts/`, so the proposal tool's audit log records each read as a read of
+people (by its path alone: a search term is `?q=` and never reaches it). The examples use the fixture
+seed on its day, Wednesday 2026-11-04.
+
+**Account** (one tab's row):
+
+| Field | Type | Notes |
+|---|---|---|
+| `id`, `name`, `city`, `industry` | | the company |
+| `category` | string | the tab: `bd` or `maintenance` |
+| `people_count` | int | that tab's people at the account, archived people left out |
+| `owner` | UserRef or null | the **salesperson** who owns the most of those people (Q33; people owned by a manager, an admin or nobody count in `people_count` only). **A tie** goes to the tied owner who logged the most recent live talk at the account (Q41), else to the tied owner first by name. `null` when no salesperson owns any of them |
+| `other_owners` | int | the "+N": how many other salespeople own someone there |
+| `last_live_at` | timestamp or null | the latest live touch (the one counting rule: a call where someone talked, a meeting, a hosted event) with **anyone** at the account who is not archived, BD or maintenance (Q34), dated on or before today |
+| `people` | [AccountPerson] | that tab's people, by name (any case), then id |
+
+**AccountPerson**: `id` (the contact page is `/bd/contact.html?id=`), `name`, `title`, `phone`,
+`phone_e164`, `email`, `category`, `owner` (UserRef or null), `lead_source`, and what the status and
+cadence pills read: `confirmed`, `importance`, `duplicate_of` (as on a Contact), `cadence_status`,
+`cadence`, `cadence_source`, `cadence_override_until`, `maintenance_due`, `maintenance_due_date`,
+`last_live_at`, `last_followup_at` (each as on a Contact).
+
+#### `GET /api/bd/contacts/accounts` (any BD role)
+
+Query: `category` (`bd`, the default, or `maintenance`), `sort` (`name`, the default; `people`, most
+first; `last_live_at`, latest first and never-talked last; ties by name, then id; an unknown one is 400
+`"Unknown sort."`), `limit`, `offset`. `{ "ok": true, "category", "total": N, "items": [Account] }`.
+
+```json
+{
+  "ok": true,
+  "category": "bd",
+  "total": 8,
+  "items": [
+    {
+      "id": 16, "name": "Bluestem Logistics", "city": "Lenexa", "industry": "Warehousing", "category": "bd",
+      "people_count": 3, "owner": { "id": 1, "name": "Avery Quill" }, "other_owners": 1, "last_live_at": null,
+      "people": [
+        { "id": 29, "name": "Ines Varga", "title": "Purchasing", "phone": "913-555-0109", "phone_e164": "+19135550109",
+          "email": "ines.varga@bluestem.example.com", "category": "bd", "confirmed": false, "importance": 1,
+          "owner": { "id": 4, "name": "Devon Hale" }, "duplicate_of": null, "lead_source": "Other/Misc",
+          "last_live_at": null, "last_followup_at": null, "cadence_status": "never", "cadence": "quarterly",
+          "cadence_source": "global", "cadence_override_until": null, "maintenance_due": false,
+          "maintenance_due_date": null }
+      ]
+    }
+  ]
+}
+```
+
+(Trimmed to one account and one person.) Bluestem's three people have three owners, one each, and
+nobody there has had a live talk, so the tie goes to the first by name.
+
+#### `GET /api/bd/contacts/search` (any BD role)
+
+`q` (required, at most 200 characters; blank is 400 `fields.q` `"Type something to search for."`)
+matches, among people who are not archived: an **account name** (any case; also by its cleaned name,
+unless the term cleans to nothing), a **person's name** (any case), a **phone in any format** (a term
+with 10 or more digits, on the last 10: `(913) 555-0108`, `+1 913 555 0108` and `9135550108` are one
+number; fewer digits never match a phone) and an **email** (any case, any part). `q` is text, never a
+pattern. One item per account and tab it is found on, in name order, BD before maintenance; `people`
+are the people who matched there (by name, then id), empty when only the account's name did. The page
+opens that account on that tab and highlights them. At most 100 items. Nothing is written anywhere: no
+event, and the audit log keeps the path only.
+
+```json
+{ "ok": true, "total": 1, "items": [{ "tab": "bd", "account": { "id": 16, "name": "Bluestem Logistics" }, "account_match": false, "people": [{ "id": 28, "name": "Sam Achebe" }] }] }
+```
+
+That is `?q=(913) 555-0108`. A maintenance person's hit has `"tab": "maintenance"`.
+
+#### `POST /api/bd/contacts/accounts/{id}/move` (salesperson, manager)
+
+Body `{ "to": "maintenance" | "bd" }` (else 400 `fields.to` `"Use maintenance or bd."`). Makes the whole
+company a maintenance account, or moves it back to BD (2026-11-20, Q1-Q11): every person at it in the
+other category, archived people too, changes; nothing else does. An unknown company is 404 `"That company
+does not exist."`; nobody to move (no person of the other category who is not archived) is 409
+`"Nobody at this company is a BD contact."` or `"Nobody at this company is a maintenance contact."`. It
+takes effect at once:
+
+- **To maintenance.** Each person's open BD call (`new` or `followup`) on this week's list, or on next
+  week's once the Friday run has made it, comes off as "Not this week" does (`snoozed` until the Monday
+  after its week). Nothing is added to the 10: calls already logged still count, the list is never
+  refilled, and it never holds more than 10 BD calls. A person whose maintenance follow-up is due (120
+  days or more since their last follow-up, or never followed up: `maintenance_due`) gets the pinned
+  maintenance follow-up on their owner's list at once, made by the Friday batch's rules, when the owner
+  is an active salesperson. It goes on the owner's live Friday list of that week when the person has no
+  task there; otherwise on a list of its own for that week (a `ten_more` batch holding only pinned
+  follow-ups, which are never part of the 10).
+- **To BD.** Each person's open pinned maintenance follow-up comes off (`snoozed`), and nothing is added
+  to any list: they wait for Friday's batch like everyone else.
+- Each person's stored `frequency_per_year` becomes the new category's default, as a contact edit's
+  category change sets it.
+- One event, `company_moved`, by the caller, with no contact: `{ "company_id", "to", "people", "contacts":
+  [[id, frequency before, frequency after]], "tasks_off": [task ids], "pins": [task ids], "batches":
+  [batch ids] }`. Ids and counts only, never a name, phone, email or note. "Company" in the event kinds
+  and in `can.move_company` is the table's word; the page says BD account (GLOSSARY.md).
+- A move takes the weekly builds' per-owner lock of every list the people may be on before it changes
+  anything, so it waits for a Friday run or a Give Me 10 More of those lists that is running.
+
+```json
+{ "to": "maintenance" }
+```
+
+```json
+{ "ok": true, "move": { "id": 9, "company": { "id": 16, "name": "Bluestem Logistics" }, "to": "maintenance", "people": 3, "calls_off": 0, "pinned": 1, "undo_until": "2026-11-04T10:32:00-06:00" } }
+```
+
+`people` counts the people who are not archived, `calls_off` the calls that came off, `pinned` the
+follow-ups pinned; `undo_until` is two minutes after the move.
+
+#### `POST /api/bd/contacts/accounts/moves/{id}/undo` (salesperson, manager; your own move only)
+
+`{id}` is the move's `id`. Puts back exactly what that one move changed: each person's category and
+frequency, each call it took off (open again) and each follow-up it pinned (gone, with any list made
+for them). `{ "ok": true, "undone": { "id", "company": { "id", "name" }, "to", "people" } }`, and one
+`company_move_undone` event `{ "move_id", "company_id", "to", "people" }`. Refused, changing nothing:
+404 `"That move does not exist."`; 403 `"Only the person who made this move can undo it."` (an admin
+too); 409 `"This move is already undone."`; 409 `"It's too late to undo this move."` (more than two
+minutes after it); 409 `"Something changed since this move, so it can't be undone."` (a later move of
+the company, a person's category or follow-ups a year changed by hand, a call it took off put back or
+marked done, or a follow-up it pinned done). A call logged or a task closed at the same moment as the
+Undo is either seen (409) or waits until the Undo is done.
 
 ### Companies (#808)
 

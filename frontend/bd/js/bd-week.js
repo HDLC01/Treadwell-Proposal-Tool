@@ -10,10 +10,9 @@
  *     and the page shows no data.
  *   - ROLE HOME. BD's old shell sent each role to its BD home; that redirect lives here now. A role
  *     whose home is Contacts (the assistant: can.week is false, and the week route refuses her) is
- *     sent to CONTACTS_HOME, which until the Contacts page moves is a plain page saying it is coming.
- *   - LINKS ONLY TO PAGES THAT HAVE MOVED. A person's name, Next up's "Open <name>" and the More
- *     menu's "Open contact" go to their contact page (/bd/contact.html, moved in #808), through
- *     BD.safeHref. Nothing links to the Contacts page until it moves.
+ *     sent to CONTACTS_HOME, the Contacts page (#810).
+ *   - A person's name, Next up's "Open <name>" and the More menu's "Open contact" go to their contact
+ *     page (/bd/contact.html, moved in #808), through BD.safeHref.
  *   - Toasts are BD.toast's; every route is under /api/bd/.
  *
  * The principle (docs/product-brief.md): the system manages the backlog, the salesperson manages
@@ -51,8 +50,7 @@
   "use strict";
 
   var BD = window.BD, BDApi = window.BDApi;
-  // The Contacts page: the BD home of a role without a weekly list. Until Contacts moves it is a
-  // plain page saying the page is coming, with a link to Add contact (#808).
+  // The Contacts page (#810): the BD home of a role without a weekly list.
   var CONTACTS_HOME = "/bd/contacts.html";
   var esc = BD.esc;
 
@@ -160,7 +158,15 @@
     return tasks.filter(function (t) { return t.batch_id === live; });
   }
 
-  function extraBatches() { return batches().filter(function (b) { return b.kind === "ten_more"; }); }
+  /** The "N more (to get ahead)" lists: Give Me 10 More's lists, each holding a BD call. A list the
+   *  server made only to pin a maintenance follow-up (a company made a maintenance account, #810) is
+   *  not one: its pin is under "Due now", and it would read "0 more". */
+  function extraBatches() {
+    var tasks = (S.week && S.week.tasks) || [];
+    return batches().filter(function (b) {
+      return b.kind === "ten_more" && tasks.some(function (t) { return t.batch_id === b.id && !isMaint(t); });
+    });
+  }
 
   function isOpen(t) { return t.status === "open"; }
   function isMaint(t) { return t.kind === "maintenance"; }

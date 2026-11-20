@@ -13,7 +13,8 @@ role should see is written out by hand:
       assistant Casey     no Call; a note, Edit details and Archive; nothing to edit in History
       manager Devon       no Call, Log, note or Archive; "Edit follow-up cadence"; the priority score
       admin Emery         Edit and Delete on every entry; the priority score (can.pick_owner)
-  * the company name is plain text and nothing links to the Contacts page, which has not moved;
+  * the company name links to its account on Contacts (?company=), and Back goes to Contacts unless the
+    person came from This Week (#810: Contacts has moved; BD's own links come back);
     Back is to This Week only for a person who came from it;
   * Add a contact: a person whose can has no add_contact (the manager) is told so and gets no form;
     the others get the form, with Cancel going to /bd/;
@@ -178,20 +179,33 @@ def test_the_priority_score_shows_to_whoever_may_pick_a_week_as_on_this_week(tmp
     assert ("Priority 82 this week" in html) is shown, role
 
 
-def test_the_company_is_plain_text_and_nothing_links_to_contacts(tmp_path):
+def test_the_company_opens_its_account_on_contacts_and_back_goes_to_contacts(tmp_path):
+    """#810: Contacts has moved, so BD's links come back: the company opens its account there
+    (/bd/contacts.html?company=10) and Back, for a person who did not come from This Week, is Contacts."""
     out, html = contact_page(tmp_path, "salesperson")
-    assert "Prairie Ridge Builders LLC" in html
-    assert "contacts.html" not in html
+    assert re.search(r'<a class="cd-company" href="/bd/contacts\.html\?company=10">Prairie Ridge Builders LLC</a>', html), \
+        html[:600]
     links = re.findall(r'href="([^"]+)"', html)
     assert links and all(h.startswith(("tel:", "mailto:", "sms:", "/bd/")) for h in links), links
-    assert 'class="back-link cd-back"' not in html, "no Back without from=week: Contacts has not moved"
+    assert re.search(r'<a class="back-link cd-back" href="/bd/contacts\.html">.*Contacts</a>', html), html[:400]
+
+
+def test_a_maintenance_contacts_company_opens_its_account_on_the_maintenance_tab(tmp_path):
+    """A company can be on both tabs (one person made maintenance on her own), so a maintenance
+    person's company link names the Maintenance tab, where she is listed."""
+    res = contact_responses()
+    res["GET /api/bd/contacts/21"]["body"]["contact"]["category"] = "maintenance"
+    out, html = contact_page(tmp_path, "salesperson", responses=res, name="maint")
+    assert re.search(r'<a class="cd-company" href="/bd/contacts\.html\?company=10&amp;tab=maintenance">'
+                     r'Prairie Ridge Builders LLC</a>', html), html[:600]
 
 
 def test_from_this_week_back_goes_to_this_week(tmp_path):
     out, html = contact_page(tmp_path, "salesperson", search="?id=21&from=week", name="from-week")
     assert re.search(r'<a class="back-link cd-back" href="/bd/">.*This Week</a>', html), html[:400]
     out, html = contact_page(tmp_path, "assistant", search="?id=21&from=week", name="assistant-from-week")
-    assert "cd-back" not in html, "no This Week for a role without one"
+    assert re.search(r'<a class="back-link cd-back" href="/bd/contacts\.html">.*Contacts</a>', html), \
+        "no This Week for a role without one: her Back is Contacts, her BD home"
 
 
 def test_every_request_is_under_api_bd(tmp_path):
@@ -213,7 +227,8 @@ def test_a_refused_bd_login_sees_the_sentence_and_no_data(tmp_path):
 def test_a_contact_id_that_is_not_a_number_is_not_found_without_a_request(tmp_path):
     out, html = contact_page(tmp_path, "salesperson", search="?id=21x", name="bad-id")
     assert "That contact isn" in text(out, "cd-root")
-    assert 'href="/bd/"' in html and "Back to the BD CRM" in html
+    # BD's "Back to Contacts" again (#810; #808 sent it to /bd/ while Contacts had not moved)
+    assert '<a class="btn btn-primary" href="/bd/contacts.html">Back to Contacts</a>' in html
     assert [f for f in out["fetches"] if "/contacts/" in f["url"]] == []
 
 
@@ -268,8 +283,10 @@ def test_the_assistant_and_the_salesperson_get_the_form(tmp_path):
         html = out["els"]["add-root"]["html"]
         assert 'id="add-form"' in html, role
         assert sorted({f["url"].split("?")[0] for f in out["fetches"]}) == ["/api/bd/settings", "/api/bd/users"]
-        assert '<a class="btn btn-tertiary" href="/bd/">Cancel</a>' in html
-        assert "contacts.html" not in html, "no link to the Contacts page, which has not moved"
+        # #810: BD's own links come back now that Contacts has moved: "Contacts" above, Cancel to it.
+        assert '<a class="btn btn-tertiary" href="/bd/contacts.html">Cancel</a>' in html
+        assert '<a class="back-link add-back" href="/bd/contacts.html">' in html and "<span>Contacts</span></a>" in html, \
+            html[:300]
     # The owner list starts on the salesperson adding (Blair, the second listed), not on the first one.
     blair = me("salesperson")
     blair["body"]["user"].update({"id": 2, "name": "Blair Fenn"})

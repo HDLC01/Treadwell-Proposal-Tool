@@ -28,9 +28,10 @@
  *     admin change or delete any, but BD's page had no way to. Each logged entry in History now has
  *     Edit (its words) for the person who logged it and for manage_entries, and Delete for
  *     manage_entries.
- *   - NO LINKS TO PAGES THAT HAVE NOT MOVED. The company name is plain text, and Back goes only to
- *     This Week (from=week): there is no Contacts link until the Contacts page moves. Another
- *     contact and Add contact are /bd/ pages, written through BD.safeHref.
+ *   - BD'S LINKS, NOW THAT CONTACTS HAS MOVED (#810). The company name opens its account on Contacts
+ *     (/bd/contacts.html?company=), and Back goes to This Week for a person who came from it
+ *     (from=week) and to Contacts otherwise, as BD had them. Another contact and Add contact are /bd/
+ *     pages, written through BD.safeHref.
  *   - BD's phone name bar was its own top bar and is gone: the tool's top bar is the only one.
  *     Toasts are BD.toast's; every route is under /api/bd/.
  *
@@ -84,8 +85,8 @@
   function taskOpen() { return !!(S.task && S.task.status === "open"); }
   function wide() { return !!(window.matchMedia && window.matchMedia(WIDE).matches); }
   function fromWeek() { return BD.qs("from") === "week"; }
-  // This Week, for a person who came from it. There is no Contacts link until that page moves.
-  function back() { return fromWeek() && S.canWeek ? { href: "/bd/", label: "This Week" } : null; }
+  // This Week, for a person who came from it (and has one); else Contacts, as BD had it.
+  function back() { return fromWeek() && S.canWeek ? { href: "/bd/", label: "This Week" } : { href: "/bd/contacts.html", label: "Contacts" }; }
   /** "Today", or "Tue, Sep 15" ("Mon, Jan 11, 2027" in another year). */
   function dayWord(at) {
     var day = BD.bizDateOf(at);
@@ -169,8 +170,13 @@
   }
 
   function subHtml(c) {
-    // Plain text until the Contacts page (where a company opens) has moved.
-    var company = c.company ? '<span class="cd-company">' + esc(c.company.name) + "</span>" : "";
+    // The company opens its account on Contacts (#810), as BD had it; a maintenance person's on the
+    // Maintenance tab, since a company can be on both and she is listed only there.
+    var to = c.company ? BD.pageHref("/bd/contacts.html?company=", c.company.id,
+      c.category === "maintenance" ? "&tab=maintenance" : "") : "";
+    var company = c.company
+      ? (to ? '<a class="cd-company" href="' + esc(to) + '">' : '<span class="cd-company">') + esc(c.company.name) + (to ? "</a>" : "</span>")
+      : "";
     var who = c.title ? esc(c.title) + (company ? " at " + company : "") : company;
     var parts = [];
     if (who) parts.push(who);
@@ -686,13 +692,8 @@
   }
 
   // ── side: Follow-up cadence ────────────────────────────────────────────────────────────────
-  var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  /** "2027-01-31" -> "Jan 31" (the date as written: no clock, no time zone). */
-  function monDay(iso) {
-    var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ""));
-    // The year only when the day is not in this (Central) year, like BD.fmtDay: "Jan 31, 2027".
-    return m ? MONTHS[+m[2] - 1] + " " + (+m[3]) + (S.today && m[1] !== String(S.today).slice(0, 4) ? ", " + m[1] : "") : "";
-  }
+  /** "2027-01-31" -> "Jan 31", "Jan 31, 2027" in another year than this (Central) one. */
+  function monDay(iso) { return BD.fmtMonthDay(iso, S.today); }
   /** The BD cadence everyone follows unless a contact has an override: weekly, monthly or quarterly. */
   function globalCadence() {
     var w = S.settings && S.settings.bd_cadence;
@@ -838,7 +839,7 @@
     root.innerHTML = '<div class="empty empty-page"><div class="empty-ico">' + ico("user-x", 24) + "</div>" +
       '<h1 class="empty-title">That contact isn\'t here</h1>' +
       '<p class="empty-text">It may have been merged into another contact, or the link may be wrong.</p>' +
-      '<a class="btn btn-primary" href="/bd/">Back to the BD CRM</a></div>';
+      '<a class="btn btn-primary" href="/bd/contacts.html">Back to Contacts</a></div>';
   }
 
   function renderError(e) {

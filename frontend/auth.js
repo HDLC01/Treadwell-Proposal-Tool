@@ -357,15 +357,18 @@
   //  - The current section is lit by the page's full path, like every row (#804).
   const BD_SECTIONS = [
     { href: "/bd/", also: ["/bd/index.html"], label: "This Week", can: "week" },
+    // #810. Contacts is every BD role's, as BD's rail had it (the assistant's BD home).
+    { href: "/bd/contacts.html", label: "Contacts" },
     // #808. One contact's page (/bd/contact.html) has moved too, but it is not a section: it opens
     // from a name, and on it no section is lit.
     { href: "/bd/add.html", label: "Add contact", can: "add_contact" },
-    // #809. Potential BD Contacts is every BD role's, as BD's rail had it. Admin is BD's page gate
-    // (admin_area: the assistant and the admins), and the salesperson's too: they import a workbook
-    // (import), and until the Contacts page moves, the import lives on Admin's Imports.
+    // #809. Potential BD Contacts is every BD role's, as BD's rail had it.
     { href: "/bd/review.html", label: "Potential BD Contacts" },
     { href: "/bd/analytics.html", label: "Analytics", can: "analytics" },
-    { href: "/bd/admin.html", label: "Admin", can: ["admin_area", "import"] },
+    // Admin is in the admins' sidebar alone, as BD's rail had it (#810). The page itself still opens
+    // for the assistant (BD's page gate, admin_area), who reaches her unknown calls from the Attach
+    // links on Contacts; the salesperson's workbook import is back on Contacts too.
+    { href: "/bd/admin.html", label: "Admin", can: "admin" },
   ];
   let BD_OPEN = false;          // the group's state on this page (the live menu's only)
   let bdMePromise = null;
