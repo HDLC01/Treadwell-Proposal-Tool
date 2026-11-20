@@ -7,6 +7,7 @@ collapsible "BD CRM" row. What a person sees:
   * Desktop: the BD CRM row (BETA) is the one lit row on every /bd/ page, its group is open, and the
     sections are exactly the ones the person's BD role may open, the current one lit by full path.
     That is This Week and Add contact (#808), each only for the roles BD's can() gives it to.
+    On a laptop-height window (1280 by 800) the menu scrolls the lit section into sight.
   * The chevron is a real button (aria-expanded, aria-controls). On a tool page the group starts
     shut and asks BD nothing; on desktop the last choice is remembered (tw_bd_open), never on a
     phone. The sidebar's Hide menu hides the sections with everything else.
@@ -223,6 +224,30 @@ def test_the_hide_menu_button_hides_the_bd_sections_with_the_sidebar(env):
         page.locator("#tw-sidebar").wait_for(state="hidden")
         assert not page.locator('#tw-bd-sections a:has-text("This Week")').is_visible()
         assert page.evaluate("localStorage.getItem('tw_nav_open')") == "0"
+    finally:
+        p.close()
+
+
+def test_on_a_laptop_window_the_lit_section_is_scrolled_into_sight(env):
+    """At 1280 by 800 the menu is taller than the window, so Add contact, BD's second section, lands
+    below the menu's fold, behind the user card. On its own page the menu scrolls it into sight: the
+    whole row sits inside the menu's visible box, and a tap at its middle reaches the row."""
+    p = _page(env, "avery.quill@example.com")
+    try:
+        page = p.open_signed_in("/bd/add.html")
+        page.locator("#add-form").wait_for(timeout=15000)
+        _wait_sections(page)
+        page.wait_for_timeout(200)
+        row = page.locator('#tw-bd-sections [aria-current="page"]')
+        assert row.inner_text().strip() == "Add contact"
+        box = row.bounding_box()
+        nav = page.locator("#tw-sidebar .tw-nav").bounding_box()
+        assert box["y"] >= nav["y"] and box["y"] + box["height"] <= nav["y"] + nav["height"], (box, nav)
+        hit = page.evaluate("([x, y]) => { const e = document.elementFromPoint(x, y);"
+                            " return !!(e && e.closest('.tw-bd-sec.active')); }",
+                            [box["x"] + box["width"] / 2, box["y"] + box["height"] / 2])
+        assert hit, "the user card covers the lit section"
+        assert page.evaluate("window.scrollY") == 0, "only the menu scrolls, not the page"
     finally:
         p.close()
 
