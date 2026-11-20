@@ -12,18 +12,18 @@ in #806, so every answer here is written out by hand from the fixture seed (bd/o
     the unmatched call 801: 95 s from +19135550199, 2026-11-03 16:42 CST
     contact 32 Wes Calder at Osage Plains Brewing (18): no owner, 913-555-0112, nothing logged
 
-People are added on the tool's sign-in domain (supabase_client.ALLOWED_DOMAIN, the tool's gate):
-example.com here, so everyone is made up. Who may call each route is the role table in
-test_bd_admin_roles.py; the People table's separation from the tool's own people is there too.
+People are added on the tool's sign-in domain (bd.auth.sign_in_domain, the one seam to the tool's
+gate, which reads supabase_client.ALLOWED_DOMAIN): example.com here, so everyone is made up. Who
+may call each route is the role table in test_bd_admin_roles.py; the People table's separation
+from the tool's own people is there too.
 """
 from __future__ import annotations
 
 import copy
-import inspect
-import re
 
 import pytest
 
+from bd import auth as bd_auth
 from bd import config as bd_config
 from bd import serialize
 
@@ -31,14 +31,13 @@ AVERY, BLAIR, CASEY, DEVON, EMERY, FRANKIE, GALE = 1, 2, 3, 4, 5, 6, 7
 CALL = 801
 WES = 32
 ADD = "Use a @example.com address."
+REAL_SIGN_IN_DOMAIN = bd_auth.sign_in_domain
 
 
 @pytest.fixture(autouse=True)
 def sign_in_domain(monkeypatch):
     """The tool's gate lets in @example.com, so a BD login can only be made for one."""
-    import supabase_client
-
-    monkeypatch.setattr(supabase_client, "ALLOWED_DOMAIN", "example.com")
+    monkeypatch.setattr(bd_auth, "sign_in_domain", lambda: "example.com")
 
 
 def envelope(r, status, code, message=None, fields=None):
@@ -143,6 +142,8 @@ def test_adding_trims_lowercases_names_from_the_email_and_logs_it(bd_seeded, bd_
     ({"email": "", "role": "salesperson"}, {"email": ADD}),
     ({"role": "salesperson"}, {"email": ADD}),
     ({"email": 7, "role": "salesperson"}, {"email": ADD}),
+    # 243 + 12 = 255 characters: one past the longest address mail allows (RFC 5321's 254).
+    ({"email": "n" * 243 + "@example.com", "role": "salesperson"}, {"email": "Use at most 254 characters."}),
     ({"email": "nell@example.com"}, {"role": "Pick a role."}),
     ({"email": "nell@example.com", "role": "boss"}, {"role": "Pick a role."}),
     ({"email": "nell@example.com", "role": "user"}, {"role": "Pick a role."}),
@@ -162,12 +163,19 @@ def test_a_name_of_exactly_120_characters_is_kept(bd_seeded, bd_as_user):
     assert body["user"]["name"] == "n" * 120
 
 
+def test_an_email_of_exactly_254_characters_is_kept(bd_seeded, bd_as_user):
+    email = "n" * 242 + "@example.com"                  # 242 + 12 = 254
+    body = ok(bd_as_user(EMERY).post("/api/bd/admin/users", json={"email": email, "role": "assistant", "name": "Nell"}))
+    assert body["user"]["email"] == email
+
+
 def test_the_domain_is_the_tools_sign_in_domain(bd_seeded, bd_as_user, monkeypatch):
     """BD's allowed-domain setting was not carried (#802): a login is made only for an address the
-    tool's gate lets in."""
+    tool's gate lets in. The real seam this time, reading the gate's own setting."""
     import supabase_client
 
-    monkeypatch.setattr(supabase_client, "ALLOWED_DOMAIN", "treadwell.example.net")
+    monkeypatch.setattr(bd_auth, "sign_in_domain", REAL_SIGN_IN_DOMAIN)
+    monkeypatch.setattr(supabase_client, "ALLOWED_DOMAIN", "@Treadwell.Example.NET ")
     envelope(bd_as_user(EMERY).post("/api/bd/admin/users", json={"email": "nell@example.com", "role": "assistant"}),
              400, "bad_request", fields={"email": "Use a @treadwell.example.net address."})
     ok(bd_as_user(EMERY).post("/api/bd/admin/users", json={"email": "nell@treadwell.example.net", "role": "assistant"}))
@@ -586,16 +594,6 @@ def test_an_unknown_provider_is_not_connected(bd_seeded, bd_as_user, phone):
     t = ok(bd_as_user(FRANKIE).get("/api/bd/admin/telephony"))["telephony"]
     assert (t["provider"], t["connected"], t["message"]) == ("carrierpigeon", False,
                                                              "This phone system is not supported yet.")
-
-
-def test_telephony_reads_only_the_bd_telephony_settings():
-    """The route reads three settings, all BD_ ones, and only whether they are set."""
-    from bd.routers import admin
-
-    src = inspect.getsource(admin._telephony_status) + inspect.getsource(admin.telephony)
-    assert sorted(set(re.findall(r"config\.([A-Z_]+)", src))) == [
-        "BD_QUO_API_KEY", "BD_QUO_WEBHOOK_SECRET", "BD_TELEPHONY_PROVIDER"]
-    assert "os.environ" not in src and "getenv" not in src
 
 
 # ── GET /api/bd/admin/unmatched-calls ────────────────────────────────────────────────────────

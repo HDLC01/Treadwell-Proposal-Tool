@@ -86,6 +86,7 @@ import zipfile
 from typing import Any
 
 from .. import appsettings, bizdate, events
+from .. import contacts_service as cs
 from .. import phone as phonemod
 from ..normalize import clean_name, email_key, lock_company_name, normalize_company
 
@@ -676,10 +677,10 @@ class _Importer:
             co = self.conn.execute("select id, name, normalized_name from companies where normalized_name = %s"
                                    " order by id limit 1", (norm,)).fetchone()
         if co is None:
-            co = self.conn.execute(
-                "insert into companies (name, normalized_name, city, industry) values (%s, %s, %s, %s)"
-                " returning id, name, normalized_name",
-                (r.company, norm, r.city, _canon(r.industry, self.settings.get("industries")))).fetchone()
+            # The one company insert the app's Add uses too (bd/contacts_service.py), so a change to
+            # the companies columns is made in one place. It normalizes r.company to `norm` itself.
+            co = cs.insert_company(self.conn, r.company, r.city,
+                                   _canon(r.industry, self.settings.get("industries")))
             self.companies[norm] = co
         return co
 

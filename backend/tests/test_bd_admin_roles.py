@@ -65,9 +65,9 @@ CASES = [(label, method, path, body, who, want[who]) for label, method, path, bo
 
 @pytest.fixture(autouse=True)
 def sign_in_domain(monkeypatch):
-    import supabase_client
+    from bd import auth as bd_auth
 
-    monkeypatch.setattr(supabase_client, "ALLOWED_DOMAIN", "example.com")
+    monkeypatch.setattr(bd_auth, "sign_in_domain", lambda: "example.com")
 
 
 def call(client, method, path, body):

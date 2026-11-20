@@ -208,6 +208,8 @@ def test_moving_someone_off_salesperson_asks_first(page_as, expect):
 
 def test_turning_off_sign_in_asks_and_saves(page_as, expect):
     _, pg = admin(page_as, EMERY)
+    # The switch's name starts with the word it shows, so "click Active" finds it (WCAG 2.5.3).
+    expect(pg.get_by_role("switch", name="Active, sign-in for Blair Fenn", exact=True)).to_have_attribute("id", "ad-active-2")
     pg.click("#ad-active-2")
     dlg = pg.locator(".dialog.is-open")
     expect(dlg).to_contain_text("Turn off sign-in for Blair Fenn?")
@@ -215,6 +217,7 @@ def test_turning_off_sign_in_asks_and_saves(page_as, expect):
     expect(toasts(pg)).to_contain_text("Blair Fenn can no longer sign in.")
     assert user(pg, 2)["active"] is False
     expect(pg.locator('tr.ad-user[data-id="2"]')).to_contain_text("Cannot sign in")
+    expect(pg.get_by_role("switch", name="Off, sign-in for Blair Fenn", exact=True)).to_have_attribute("id", "ad-active-2")
     pg.click("#ad-active-2")                          # back on: no question
     expect(toasts(pg)).to_contain_text("Blair Fenn can sign in again.")
     assert user(pg, 2)["active"] is True
@@ -457,6 +460,13 @@ def test_a_workbook_is_imported_after_a_practice_run(page_as, expect, email, tmp
     dlg = pg.locator(".dialog.is-open")
     expect(dlg).to_contain_text("1 contact read, 0 possible duplicates.")
     expect(dlg).to_contain_text("This was a practice run. Nothing has been imported yet.")
+    # The redraw keeps focus in the dialog (on Close, where it opened) and says what came back.
+    expect(pg.locator("#ad-import-body")).to_have_attribute("aria-busy", "false")
+    expect(pg.locator("#bd-live")).to_have_text(
+        "1 contact read, 1 would be added, 0 would be updated. This was a practice run.")
+    focus = pg.evaluate("() => { var a = document.activeElement;"
+                        " return a && a.closest('.dialog.is-open') ? a.textContent.trim() : null; }")
+    assert focus == "Close", "focus left the import dialog: %r" % focus
     assert api(pg, "/api/bd/contacts?q=Rae%20Lindgren")["total"] == 0, "a practice run adds no one"
     dlg.get_by_role("button", name="Import now").click()
     expect(toasts(pg)).to_contain_text("Imported: 1 added, 0 updated.")

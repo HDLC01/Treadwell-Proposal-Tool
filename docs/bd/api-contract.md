@@ -946,7 +946,8 @@ Every BD login, turned-off ones too, in id order. Paged by `limit` and `offset` 
 #### `POST /api/bd/admin/users` (admin; a super admin to add an admin)
 
 `{ "email", "role", "name"? }`. The email is trimmed and lower-cased and must be an address the
-proposal tool's sign-in lets in (its allowed domain), else 400 `{"email": "Use a @<domain> address."}`.
+proposal tool's sign-in lets in (its allowed domain), else 400 `{"email": "Use a @<domain> address."}`;
+one longer than 254 characters is 400 `{"email": "Use at most 254 characters."}` (#809).
 `role` is one of the five BD roles (400 `"Pick a role."`). `name` is optional text of at most 120
 characters; without it the name comes from the email (`nell.ash@...` is "Nell Ash"). Someone who
 already has a BD login, turned off or not, is 409 `"That person already has a login."`. Only a

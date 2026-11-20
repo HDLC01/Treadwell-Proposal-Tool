@@ -38,7 +38,7 @@ from starlette.types import Message, Receive
 from .. import db, errors, serialize, web
 from ..auth import require_role
 from ..ops import import_workbook as importer
-from ..paging import page_params
+from ..paging import page_or_400
 
 router = web.make_router()
 
@@ -128,10 +128,7 @@ def post_import(user: dict = Depends(require_role(*IMPORT_ROLES)), upload: Uploa
 def list_imports(request: Request, user: dict = Depends(require_role(*IMPORT_ROLES))):
     """Every import, newest first, everyone's (a salesperson's too). The one paging rule: a 0 or
     missing limit is 100, a larger one is capped at 500."""
-    fields: dict = {}
-    limit, offset = page_params(request.query_params, fields)
-    if fields:
-        raise errors.bad_request("Some fields need fixing.", fields)
+    limit, offset = page_or_400(request.query_params)
     with db.connect() as conn:
         total = conn.execute("select count(*) as n from imports").fetchone()["n"]
         rows = conn.execute(serialize.IMPORT_SELECT + " order by im.id desc limit %s offset %s",

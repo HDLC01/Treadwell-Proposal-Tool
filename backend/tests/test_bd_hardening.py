@@ -335,9 +335,9 @@ def _unsaveable_cases(company_id):
 
 
 def test_text_postgres_cannot_hold_is_a_400_and_the_app_carries_on(bd_seeded, bd_db, bd_as_user, monkeypatch):
-    import supabase_client
+    from bd import auth as bd_auth
 
-    monkeypatch.setattr(supabase_client, "ALLOWED_DOMAIN", "example.com")   # so a new login's email is checked
+    monkeypatch.setattr(bd_auth, "sign_in_domain", lambda: "example.com")   # so a new login's email is checked
 
     def counts():
         return bd_db.execute("select (select count(*) from bd.contacts) as contacts,"

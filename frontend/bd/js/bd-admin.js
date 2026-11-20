@@ -70,8 +70,7 @@
    *  redraw never leaves a dead button). */
   function sectionError(box, e, retry) {
     if (!box) return;
-    box.innerHTML = '<div class="error-box" role="alert"><p>' + esc(errText(e)) + "</p>" +
-      '<button type="button" class="btn" data-retry>Try again</button></div>';
+    BD.errorBox(box, e);
     box._adRetry = retry;
   }
   function wireRetry(box) {
@@ -132,7 +131,8 @@
       (why ? ' aria-describedby="ad-why-' + id + '"' : "") + ">" + roleOptions(u.role) + "</select>" +
       (why ? '<span class="ad-why" id="ad-why-' + id + '">' + esc(why) + "</span>" : "") + "</td>" +
       '<td class="ad-c-active"><label class="ad-switch"><button type="button" class="switch" role="switch" id="ad-active-' + id +
-      '" data-active aria-checked="' + (u.active ? "true" : "false") + '" aria-label="' + esc(u.name) + ' can sign in"' +
+      '" data-active aria-checked="' + (u.active ? "true" : "false") + '" aria-label="' + (u.active ? "Active" : "Off") +
+      ", sign-in for " + esc(u.name) + '"' +
       (locked ? " disabled" : "") + "></button>" + "<span>" + (u.active ? "Active" : "Off") + "</span></label></td>" +
       '<td class="ad-c-seen">' + (u.last_seen_at ? '<span class="ad-seen-label">Last seen </span>' : "") + esc(seen) + "</td></tr>";
   }
@@ -944,7 +944,7 @@
     el.className = "dialog ad-import-dlg";
     el.setAttribute("aria-labelledby", "ad-import-title");
     el.innerHTML = '<h2 class="dialog-title" id="ad-import-title">Import workbook</h2>' +
-      '<div class="ad-import-body" id="ad-import-body"><p class="ad-import-wait"><span class="spinner" aria-hidden="true"></span> Reading ' +
+      '<div class="ad-import-body" id="ad-import-body" aria-busy="true"><p class="ad-import-wait"><span class="spinner" aria-hidden="true"></span> Reading ' +
       esc(file.name) + "...</p></div>" +
       '<div class="dialog-actions" id="ad-import-actions"><button type="button" class="btn" data-act="close">Close</button></div>';
     el.addEventListener("click", function (e) {
@@ -964,6 +964,7 @@
     });
     postImport(file, true).then(showImportSummary, function (e) {
       if (imp.dlg !== el) return;
+      $("ad-import-body").setAttribute("aria-busy", "false");
       $("ad-import-body").innerHTML = '<div class="error-box" role="alert">' + esc(errText(e)) + "</div>";
     });
   }
@@ -973,6 +974,7 @@
     var errs = (r.errors || []).slice(0, 10);
     // Import now only when the practice run found something to add or change
     var changes = (Number(r.created) || 0) + (Number(r.updated) || 0) > 0;
+    $("ad-import-body").setAttribute("aria-busy", "false");
     $("ad-import-body").innerHTML =
       '<p class="strong">' + esc(BD.plural(r.rows_read, "contact")) + " read, " +
       esc(BD.plural(r.possible_duplicates, "possible duplicate")) + ".</p>" +
@@ -985,8 +987,14 @@
       '<p class="panel-info">' + ico("info", 18) + "<span>" +
       (changes ? "This was a practice run. Nothing has been imported yet." : "This was a practice run. Importing this file would change nothing.") +
       "</span></p>";
-    $("ad-import-actions").innerHTML = '<button type="button" class="btn" data-act="close">Close</button>' +
-      (changes ? '<button type="button" class="btn btn-primary" data-act="import-now">Import now</button>' : "");
+    // Close stays where it is (focus is on it since the dialog opened): Import now is added beside
+    // it, so the redraw never drops focus to the page behind the dialog.
+    if (changes) {
+      $("ad-import-actions").insertAdjacentHTML("beforeend",
+        '<button type="button" class="btn btn-primary" data-act="import-now">Import now</button>');
+    }
+    BD.announce(BD.plural(r.rows_read, "contact") + " read, " + (Number(r.created) || 0) + " would be added, " +
+      (Number(r.updated) || 0) + " would be updated. This was a practice run.");
     loadImports();          // the practice run is a past import too
   }
 
@@ -1077,7 +1085,7 @@
     var note = $("ad-note");
     if (!note) return;
     note.hidden = false;
-    note.innerHTML = '<div class="panel-info ad-note" role="status">' + ico("info", 18) + "<span>" + esc(words) + "</span></div>";
+    BD.note(note, words, "ad-note");
   }
 
   function show(id, on) {

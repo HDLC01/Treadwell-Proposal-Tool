@@ -18,8 +18,8 @@ BD'S PEOPLE TABLE IS NOT THE PROPOSAL TOOL'S (#802). These routes read and write
 login and its BD role. They never touch the tool's profiles, roles, sidebar (nav) policy or Special
 permissions, and the tool's Admin page never touches bd.users. A proposal-tool admin has no BD role
 until a BD admin adds them here like anyone else (Q30). The address must be one the tool's sign-in
-lets in (its allowed domain, supabase_client.ALLOWED_DOMAIN): BD's own allowed-domain setting was
-not carried, because the tool's gate does that check.
+lets in (its allowed domain, read through bd/auth.py's sign_in_domain, the one seam to the tool's
+gate): BD's own allowed-domain setting was not carried, because the tool's gate does that check.
 
 The rules worth knowing before changing anything here:
   * Only a super admin adds an admin or super admin, changes a user who is one, or makes someone
@@ -50,10 +50,10 @@ from typing import Any
 
 from fastapi import Body, Depends, Path, Query, Request
 
-from .. import appsettings, bizdate, config, db, errors, interactions_service, serialize, web, weekly
+from .. import appsettings, auth, bizdate, config, db, errors, interactions_service, serialize, web, weekly
 from ..auth import ROLES, name_of_email, refuse_login_change, refuse_new_login, require_role
 from ..events import log_event
-from ..paging import as_id, json_object, page_params, path_id
+from ..paging import as_id, json_object, page_or_400, path_id
 from ..phone import display, last10
 
 router = web.make_router()
@@ -74,29 +74,13 @@ FREQUENCY_KEYS = ("maintenance",)
 
 USER_COLUMNS = "id, email, name, role, active, last_seen_at"
 NAME_MAX = 120
+EMAIL_MAX = 254                                # the longest address mail allows (RFC 5321)
 USER_NOT_FOUND = "That user does not exist."
 CALL_NOT_FOUND = "That call does not exist."
 
 
-def sign_in_domain() -> str:
-    """The email domain the proposal tool's sign-in lets in (the gate's rule, read at call time)."""
-    import supabase_client
-
-    return str(supabase_client.ALLOWED_DOMAIN or "").strip().lower().lstrip("@")
-
-
 def _email_ok(email: str, domain: str) -> bool:
     return bool(domain) and re.fullmatch(r"[^@\s]+@" + re.escape(domain), email) is not None
-
-
-def _page(request: Request):
-    """limit (default 100, a 0 is the default, max 500: a larger one is capped) and offset, read
-    the one way every list route reads them (bd.paging)."""
-    fields: dict = {}
-    limit, offset = page_params(request.query_params, fields)
-    if fields:
-        raise errors.bad_request("Some fields need fixing.", fields)
-    return limit, offset
 
 
 def _fail_fields(fields: dict, messages: dict | None = None, default: str = "Some fields need fixing."):
@@ -114,7 +98,7 @@ def _fail_fields(fields: dict, messages: dict | None = None, default: str = "Som
 def list_users(request: Request, user: dict = Depends(ADMIN_ONLY)):
     """Every BD login, turned-off ones too (the page turns sign-ins back on from here). Paged by
     limit/offset like every list; `total` counts them all."""
-    limit, offset = _page(request)
+    limit, offset = page_or_400(request.query_params)
     with db.connect() as conn:
         total = conn.execute("select count(*)::integer as n from users").fetchone()["n"]
         rows = conn.execute("select " + USER_COLUMNS + " from users order by id limit %s offset %s",
@@ -129,9 +113,11 @@ def create_user(body: Any = Body(None), me: dict = Depends(ADMIN_ONLY)):
     email = raw_email.strip().lower() if isinstance(raw_email, str) else ""
     role = body.get("role")
     raw_name = body.get("name")
-    domain = sign_in_domain()
+    domain = auth.sign_in_domain()
     fields = {}
-    if not _email_ok(email, domain):
+    if len(email) > EMAIL_MAX:
+        fields["email"] = "Use at most %d characters." % EMAIL_MAX
+    elif not _email_ok(email, domain):
         fields["email"] = "Use a @%s address." % domain
     if role not in ROLES:
         fields["role"] = "Pick a role."
@@ -406,7 +392,7 @@ def telephony(user: dict = Depends(ADMIN_ONLY)):
 # ── unmatched calls ──────────────────────────────────────────────────────────────────────────
 @router.get("/api/bd/admin/unmatched-calls")
 def list_unmatched(request: Request, status: str = Query("open"), user: dict = Depends(ASSISTANT)):
-    limit, offset = _page(request)
+    limit, offset = page_or_400(request.query_params)
     if status not in UNMATCHED_STATUSES:
         raise errors.bad_request("Pick open, attached, dismissed or all.",
                                  {"status": "Use open, attached, dismissed or all."})

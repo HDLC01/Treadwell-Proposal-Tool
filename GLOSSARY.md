@@ -250,7 +250,7 @@ Bringing BD contacts in from a workbook (.xlsx) or a .csv on the BD Admin page. 
 _Avoid_: Upload, sync, dry run (the API's word for a practice run)
 
 **Unmatched call**:
-A call or text the phone system recorded whose number matched no BD contact. An assistant or BD admin puts it on a BD contact's history or dismisses it.
+A call or text the phone system recorded whose number matched no BD contact. An assistant or BD admin puts it on a BD contact's history or dismisses it. The BD Admin page calls them Unknown calls, as BD's did; the API and the code say unmatched.
 _Avoid_: Missed call (that is one nobody answered), Not linked (that is a job with no Raken project)
 
 **Potential BD Contacts**:

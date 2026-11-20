@@ -19,11 +19,12 @@
      up answers 200, and a route not built yet answers 503 "not built yet" behind its door.
   D. THE RULES BEHIND THE DOOR that BD's matrix held and no other BD test file holds: someone else's
      week or list however its id is spelled, a contact shared by the whole team, server-owned keys in a
-     body, and a manager's cadence-only edit, key by key.
+     body (archived_at / archived on a contact PATCH among them), and a manager's cadence-only edit,
+     key by key.
 
-What BD's matrix held that is not here, and where it is instead, is in the #809 PR. The service-token
-route and its checks were not carried (#806); BD's own token checks are the tool's sign-in now
-(test_bd_token_tampering.py).
+Every BD matrix test that is not here under its own name is in the #809 PR's "Not carried over /
+renamed" table, with the test that covers it now. The service-token route and its checks were not
+carried (#806); BD's own token checks are the tool's sign-in now (test_bd_token_tampering.py).
 """
 from __future__ import annotations
 
@@ -248,6 +249,35 @@ def test_the_webhook_takes_no_sign_in_and_is_not_built(bd_seeded, bd_client, mon
         assert bd_client.request(method, path, json={}).json() == NOT_TURNED_ON
 
 
+@pytest.mark.parametrize("path", [
+    "/api/bd/me/", "/api/bd//me", "/api/bd/./me", "/API/bd/me", "/api/BD/me", "/api/bd/me%20", "/api/bd/%6De",
+    "/api/bd/me;x=1", "/api/bd/me/.", "/api/bd/me%00", "/api/bd/webhooks/telephony/quo/../../me",
+    "/api/bd/webhooks/telephony/quo%2F..%2F..%2Fme", "/api/bd/webhooks/telephony/../../me", "/api/bd", "/api/bd/",
+], ids=lambda p: p)
+def test_path_tricks_do_not_open_a_door_without_a_sign_in(bd_seeded, bd_client, monkeypatch, real_verify_identity,
+                                                          path):
+    """BD's path tricks, under /api/bd/: a doubled or dotted slash, another case, an encoded letter or
+    slash, a parameter or a NUL, a walk out of the public webhook. None of them reaches a BD answer
+    without a sign-in."""
+    import supabase_client
+
+    monkeypatch.setattr(supabase_client, "verify_identity", real_verify_identity)
+    r = bd_client.get(path)
+    assert r.status_code in (400, 401, 404), (path, r.status_code, r.text[:200])
+    assert "avery" not in r.text.lower() and '"user"' not in r.text, (path, r.text[:200])
+
+
+def test_options_and_head_without_a_sign_in_give_nothing(bd_seeded, bd_client, monkeypatch, real_verify_identity):
+    import supabase_client
+
+    monkeypatch.setattr(supabase_client, "verify_identity", real_verify_identity)
+    r = bd_client.options("/api/bd/me")
+    assert r.status_code in (200, 400, 401, 404, 405) and '"user"' not in r.text, (r.status_code, r.text)
+    assert "access-control-allow-origin" not in r.headers
+    r = bd_client.head("/api/bd/me")
+    assert r.status_code == 401 and r.content == b"", (r.status_code, r.content[:200])
+
+
 # ══ C. ROLE x ROUTE ══════════════════════════════════════════════════════════════════════════════
 GATE_CASES = [(m, p, role) for (m, p) in ROUTE_KEYS for role in ROLES]
 
@@ -344,6 +374,41 @@ def test_a_salesperson_reads_and_edits_a_colleagues_contact(bd_seeded, bd_db, bd
     assert log.status_code == 200 and log.json()["interaction"]["user"]["id"] == BLAIR
     assert blair.post("/api/bd/contacts/%d/archive" % cid, json={"archived": True}).status_code == 200
     assert bd_db.execute("select archived_at from bd.contacts where id = %s", (cid,)).fetchone()["archived_at"]
+
+
+def test_a_patch_cannot_restore_or_archive_a_contact_by_an_archived_key(bd_seeded, bd_db, bd_as_user):
+    """Archiving and restoring go through POST .../archive only. A PATCH that names archived_at or
+    archived is taken for its other fields and leaves the archive as it was, both ways."""
+    cid = THROWAWAY_CONTACT
+    avery = bd_as_user(1)
+
+    def archived_at():
+        return bd_db.execute("select archived_at from bd.contacts where id = %s", (cid,)).fetchone()["archived_at"]
+
+    r = avery.patch("/api/bd/contacts/%d" % cid, json={"archived_at": "2026-11-01T09:00:00-06:00", "archived": True,
+                                                       "notes": "live"})
+    assert r.status_code == 200, r.text
+    assert archived_at() is None, "a PATCH archived a live contact"
+    assert avery.post("/api/bd/contacts/%d/archive" % cid, json={"archived": True}).status_code == 200
+    was = archived_at()
+    assert was is not None
+    r = avery.patch("/api/bd/contacts/%d" % cid, json={"archived_at": None, "archived": False, "notes": "n"})
+    assert r.status_code == 200, r.text
+    row = bd_db.execute("select archived_at, notes from bd.contacts where id = %s", (cid,)).fetchone()
+    assert (row["archived_at"], row["notes"]) == (was, "n"), "a PATCH restored an archived contact"
+    assert avery.post("/api/bd/contacts/%d/archive" % cid, json={"archived": False}).status_code == 200
+    assert archived_at() is None
+
+
+def test_a_duplicate_flag_can_only_be_cleared_never_set_by_a_patch(bd_seeded, bd_as_user):
+    """duplicate_of is the server's to set (the duplicate check); a PATCH may only clear it (null).
+    Setting it is 400 and the refused PATCH saves nothing, its other fields included."""
+    avery = bd_as_user(1)
+    url = "/api/bd/contacts/%d" % THROWAWAY_CONTACT
+    before = avery.get(url).json()["contact"]
+    r = avery.patch(url, json={"duplicate_of": SHARED_CONTACT, "notes": "must not save"})
+    assert r.status_code == 400 and "duplicate_of" in r.json().get("fields", {}), r.text
+    assert avery.get(url).json()["contact"] == before, "a refused PATCH saves nothing"
 
 
 def test_company_create_and_patch_ignore_server_owned_keys(bd_seeded, bd_db, bd_as_user):

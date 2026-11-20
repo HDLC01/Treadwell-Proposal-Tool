@@ -120,6 +120,15 @@ def signed_in_identity(request: Request) -> dict:
     return identity
 
 
+def sign_in_domain() -> str:
+    """The email domain the proposal tool's sign-in lets in (supabase_client.ALLOWED_DOMAIN, the
+    gate's rule, read at call time). BD's People table adds a login only on it (#809). The one tool
+    setting BD reads, read-only and only here (bd/config.py; tests/test_bd_config.py)."""
+    import supabase_client
+
+    return str(supabase_client.ALLOWED_DOMAIN or "").strip().lower().lstrip("@")
+
+
 def current_user(request: Request) -> dict:
     """FastAPI dependency: the signed-in person's active BD login (a dict). One checkout checks the
     ledger, then looks the person up. Cached on the request."""

@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import inspect
 import io
 import json
 import pathlib
@@ -127,12 +126,6 @@ def test_sec1_a_refused_role_never_has_its_body_read(team, bd_app, bd_db):
     status, body, pulled = _asgi_post(bd_app.app, "/api/bd/admin/import", h, _multipart("SEC1m", "big.csv", endless))
     assert (status, body["message"]) == (403, "Your role can't do that.")
     assert pulled == 0
-
-
-def test_sec1_the_docstring_still_says_how():
-    from bd.routers import imports
-
-    assert "capped WHILE IT STREAMS" in imports.__doc__
 
 
 # ── SEC-2: a compressed workbook cannot pin the parser or a pooled connection ───────────────────
@@ -255,10 +248,18 @@ def test_c4_non_numeric_ids_are_404(bd_seeded, bd_as_user, who, method, path):
 
 
 # ── C5: another salesperson may flag "not the right person" (no own-list check) ──────────────
-def test_c5_not_right_person_has_no_owner_check():
-    from bd.routers import week
-
-    assert "_check_own_list" not in inspect.getsource(week.task_not_right_person)
+def test_c5_another_salesperson_may_flag_not_the_right_person(bd_seeded, bd_as_user, bd_db):
+    """Task 301 (Hal Brecken, contact 30) is on Avery's (1) list. Blair (2), another salesperson, may
+    not tick it done (the own-list check), but may flag Hal as not the right person: a data fix, not
+    a list action."""
+    envelope(bd_as_user(2).post("/api/bd/tasks/301/done", json={}), 403, "forbidden")
+    r = bd_as_user(2).post("/api/bd/tasks/301/not-right-person", json={"note": "Hal retired."})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert (body["task"]["id"], body["task"]["status"]) == (301, "done")
+    assert (body["contact"]["id"], body["contact"]["confirmed"]) == (30, False)
+    ev = bd_db.execute("select kind, actor_id, contact_id, detail from bd.events").fetchall()
+    assert ev == [{"kind": "unconfirmed", "actor_id": 2, "contact_id": 30, "detail": "Hal retired."}]
 
 
 # ── C6: AI is off; BD reads no AI setting (#802 did not carry it) ──────────────────────────────

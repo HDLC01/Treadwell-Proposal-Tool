@@ -4,7 +4,8 @@ One package with package-relative imports, so nothing here can collide with the 
 modules (`bd.config` is never the tool's config). Ported from a clean export of BD's staging
 branch, never from a working folder.
 
-  config     every BD_ setting (python-dotenv is not used; the tool's settings are never read)
+  config     every BD_ setting (python-dotenv is not used; the tool's settings are never read,
+             except the sign-in domain, read-only, by auth.sign_in_domain alone)
   bizdate    Central dates and timestamps, Monday weeks, the BD_TODAY / BD_NOW overrides
   normalize  the company duplicate key and trimmed names
   phone      US numbers to E.164, the last-10 match key, the display form
@@ -31,7 +32,8 @@ THE API (#806), on the proposal tool's app, every route under /api/bd/:
              app-wide), make_router(), the BD_ENABLED switch
   errors     the envelope ({"ok": false, "error", "message"}) and handle(), its one entry point
   auth       the BD login (bd.users) for the identity the tool's gate verified, the five BD roles,
-             can(), and who may change a BD login (only a super admin changes an admin)
+             can(), who may change a BD login (only a super admin changes an admin), and the
+             tool's sign-in domain a new BD login must be on
   appsettings  BD's Settings object (defaults merged with bd.settings)
   paging     limit / offset and other query-string numbers
   routers/   meta (me, settings, users), week (This Week and the task buttons), interactions

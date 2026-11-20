@@ -65,13 +65,6 @@
     updateCounts();
   }
 
-  function showError(e) {
-    var body = $("rv-body");
-    body.setAttribute("aria-busy", "false");
-    body.innerHTML = '<div class="error-box" role="alert"><p>' + esc(BD.errText(e)) + "</p>" +
-      '<button type="button" class="btn" data-retry>Try again</button></div>';
-  }
-
   function load() {
     var seq = ++loadSeq;
     var body = $("rv-body");
@@ -81,7 +74,7 @@
       if (seq !== loadSeq) return;
       items = (res.items || []).filter(function (c) { return VIEWS[c.status]; });
       render();
-    }, function (e) { if (seq === loadSeq) showError(e); });
+    }, function (e) { if (seq === loadSeq) BD.errorBox($("rv-body"), e); });
   }
 
   function setView(next) {
@@ -96,17 +89,11 @@
     } catch (err) { /* the address just stays */ }
   }
 
-  function renderNote(words) {
-    var body = $("rv-body");
-    body.setAttribute("aria-busy", "false");
-    body.innerHTML = '<div class="panel-info rv-note" role="status">' + BD.icon("info", 18) + "<span>" + esc(words) + "</span></div>";
-  }
-
   var auth = window.TWAuth;
   if (!auth || !auth.ready || typeof auth.bdMe !== "function" || typeof auth.bdFailure !== "function") return;
   auth.ready.then(function () { return auth.bdMe(); }).then(function (res) {
     var ok = res && res.status >= 200 && res.status < 300 && res.body && res.body.ok;
-    if (!ok) { renderNote(auth.bdFailure(res && res.status, res && res.body).message); return null; }
+    if (!ok) { BD.note($("rv-body"), auth.bdFailure(res && res.status, res && res.body).message, "rv-note"); return null; }
     $("rv-views").addEventListener("click", function (e) {
       var b = e.target.closest && e.target.closest("button[data-view]");
       if (!b || b.getAttribute("data-view") === view) return;

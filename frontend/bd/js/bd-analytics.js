@@ -110,13 +110,6 @@
       '<p class="empty-text">The numbers come back once the start and end dates are set, with the start first.</p></div>';
   }
 
-  function showError(e) {
-    var body = $("an-body");
-    body.setAttribute("aria-busy", "false");
-    body.innerHTML = '<div class="error-box" role="alert"><p>' + esc(BD.errText(e)) + "</p>" +
-      '<button type="button" class="btn" data-retry>Try again</button></div>';
-  }
-
   /** The owners: the people who own contacts (a manager cannot list the BD logins). Optional: a
    *  failure leaves the filter on Everyone. */
   function loadOwners() {
@@ -151,7 +144,7 @@
       body.setAttribute("aria-busy", "false");
       body.innerHTML = '<div class="panel-info an-note" role="status">' + BD.icon("info", 18) +
         "<span>The numbers came back, but this page does not draw them yet.</span></div>";
-    }, function (e) { if (mine === seq) showError(e); });
+    }, function (e) { if (mine === seq) BD.errorBox($("an-body"), e); });
   }
 
   function download() {
@@ -169,11 +162,7 @@
     }).then(function () { BD.setBusy(btn, false); btn.disabled = !!rangeProblem(); });
   }
 
-  function renderNote(words) {
-    var body = $("an-body");
-    body.setAttribute("aria-busy", "false");
-    body.innerHTML = '<div class="panel-info an-note" role="status">' + BD.icon("info", 18) + "<span>" + esc(words) + "</span></div>";
-  }
+  function renderNote(words) { BD.note($("an-body"), words, "an-note"); }
 
   var auth = window.TWAuth;
   if (!auth || !auth.ready || typeof auth.bdMe !== "function" || typeof auth.bdFailure !== "function") return;

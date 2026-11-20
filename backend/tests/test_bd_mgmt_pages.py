@@ -113,7 +113,9 @@ def text(out, el):
     return htmlmod.unescape(out["els"][el]["text"])
 
 
-def hidden(out):
+def shown(out):
+    """The Admin sections left showing. Every section starts hidden in the markup; the harness's
+    stand-in elements start shown, so the page must set each one."""
     return sorted(i for i in ("ad-s-users", "ad-s-friday", "ad-s-rules", "ad-s-lists", "ad-s-phone", "ad-s-imports")
                   if not out["els"][i]["hidden"])
 
@@ -136,12 +138,6 @@ ADMIN_ASKED = {
 ADMIN_ASKED["super_admin"] = ADMIN_ASKED["admin"]
 
 
-def start_hidden(out):
-    """Every section starts hidden in the markup; the harness's stand-in elements start shown, so the
-    page must set each one. Reported as the sections left showing."""
-    return hidden(out)
-
-
 @pytest.mark.parametrize("role", list(ADMIN_SHOWN))
 def test_admin_shows_and_asks_for_exactly_what_the_role_may_use(tmp_path, role):
     out = run(tmp_path, "admin.html", ADMIN_IDS, me(role), name=role)
@@ -150,16 +146,20 @@ def test_admin_shows_and_asks_for_exactly_what_the_role_may_use(tmp_path, role):
         assert text(out, "ad-note") == "Admin isn't part of your BD role."
         assert out["els"]["ad-note"]["hidden"] is False
         return
-    assert start_hidden(out) == ADMIN_SHOWN[role]
+    assert shown(out) == ADMIN_SHOWN[role]
     assert out["els"]["ad-note"]["hidden"] is True or text(out, "ad-note") == ""
 
 
-def test_the_assistants_phone_section_is_called_unknown_calls(tmp_path):
+def test_the_page_calls_unmatched_calls_unknown_calls(tmp_path):
+    """BD's words, kept by the port: the API's unmatched calls are "Unknown calls" on the page
+    (GLOSSARY.md "Unmatched call")."""
     out = run(tmp_path, "admin.html", ADMIN_IDS, me("assistant"))
     assert text(out, "ad-h-phone") == "Unknown calls"
+    assert "No unknown calls." in text(out, "ad-phone")
     out = run(tmp_path, "admin.html", ADMIN_IDS, me("admin"), name="admin")
     assert text(out, "ad-h-phone") == "", "an admin's keeps the page's own heading"
     assert "Not connected" in text(out, "ad-phone-status")
+    assert ">Unknown calls</h3>" in out["els"]["ad-phone"]["html"] and "No unknown calls." in text(out, "ad-phone")
 
 
 def test_a_plain_admin_is_offered_no_admin_role_and_the_super_admin_is(tmp_path):
@@ -207,3 +207,12 @@ def test_a_person_with_no_bd_role_gets_the_servers_sentence_and_no_request(tmp_p
     out = run(tmp_path, page, ids, NO_BD_ROLE)
     assert out["fetches"] == []
     assert text(out, box) == "You don't have a BD role. Ask a BD admin to add you."
+
+
+@pytest.mark.parametrize("page, ids, box", [("admin.html", ADMIN_IDS, "ad-note"), ("review.html", REVIEW_IDS, "rv-body"),
+                                            ("analytics.html", ANALYTICS_IDS, "an-body")])
+def test_the_servers_sentence_goes_in_as_text(tmp_path, page, ids, box):
+    refused = {"status": 403, "body": {"ok": False, "error": "forbidden", "message": "Ask <b>Frankie</b> to add you."}}
+    out = run(tmp_path, page, ids, refused)
+    assert text(out, box) == "Ask <b>Frankie</b> to add you."
+    assert "<b>" not in out["els"][box]["html"]
