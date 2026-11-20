@@ -25,6 +25,7 @@ command's own checksum code.
 from __future__ import annotations
 
 import json
+import sys
 import time
 
 import pytest
@@ -668,9 +669,17 @@ def test_the_reverse_copy_reads_nothing_outside_schema_bd_on_the_tool_side(dbs, 
 
 
 def test_no_subcommand_prints_row_data_through_a_rollback_and_a_re_cut_over(dbs, api, monkeypatch, capsys):
-    printed = []
+    """Only what the subcommands print is checked. The tool's API, called between them, prints its
+    audit lines (each naming the signed-in user's email) to stderr, and when the audit file cannot
+    rotate (Windows, another process holding it) a logging error quoting the line: both are routed
+    into the captured stderr here, every run, so they can never be counted as the command's."""
+    import audit
+
+    monkeypatch.setattr(audit._stream, "stream", sys.stderr)                      # capsys's, by now
+    printed, before = [], []
 
     def main(*args):
+        before.append(capsys.readouterr().err)                  # printed before the subcommand: not its
         code = cutover.main(list(args))
         out = capsys.readouterr()
         printed.append(out.out + out.err)
@@ -692,6 +701,7 @@ def test_no_subcommand_prints_row_data_through_a_rollback_and_a_re_cut_over(dbs,
     assert main("check") == EXIT_OK
     assert main("forward", "--record", str(dbs.record2)) == EXIT_OK
     joined = "\n".join(printed)
+    assert MARLO in before[1]                                # the API's audit lines did reach the capture
     assert "gained people" in joined and "bd_carry saved" in joined and "bd_carry (saved by a reverse copy)" in joined
     assert "ZQ" not in joined
     for value in src.PERSONAL + NEW_PERSONAL + ["Rosalind Ketteridge", "rosalind@juniperridge.example.com",
