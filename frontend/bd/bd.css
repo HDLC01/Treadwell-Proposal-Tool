@@ -743,14 +743,15 @@
   .bd-app .wk-row-nophone .wk-row-more { grid-area: call; }
 }
 /* A middle column (520-719: beside the tray, or a tablet): the company on the left, the pill over
-   the reason on the right, two lines a row instead of four. */
+   the reason on the right, two lines a row instead of four. The company side takes 1.8 parts so a
+   name like "Prairie Ridge Builders LLC" stays on one line in Linux's wider DejaVu Sans too. */
 @container wk-main (min-width: 520px) and (max-width: 719.98px) {
   .bd-app .wk-co-head {
-    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) 44px 44px;
+    grid-template-columns: minmax(0, 1.8fr) minmax(0, 1fr) 44px 44px;
     grid-template-areas: "who pill call more" "who reason call more";
     align-items: center; gap: 2px 12px; padding: 10px 16px;
   }
-  .bd-app .wk-co.is-readonly > .wk-co-head { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(104px, auto);
+  .bd-app .wk-co.is-readonly > .wk-co-head { grid-template-columns: minmax(0, 1.8fr) minmax(0, 1fr) minmax(104px, auto);
     grid-template-areas: "who pill call" "who reason call"; }
   .bd-app .wk-pill { align-self: end; }
   .bd-app .wk-reason { align-self: start; }

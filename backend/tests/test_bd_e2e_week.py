@@ -1036,9 +1036,12 @@ def test_at_1280_beside_the_tray_rows_stay_two_lines(page_as):
     right: never the four-line stack. On the pinned Next up, More sits beside Call. With nothing
     pinned, BD put Not this week beside Call too; beside the tool's sidebar and the tray the card is
     narrower, so Call has its own line and Not this week and More share the next (two lines, never
-    three: a deviation from BD noted for Hanz in the PR)."""
+    three: a deviation from BD noted for Hanz in the PR). Measured in DejaVu Sans, the font CI's
+    Linux falls back to and wider than Windows' or a Mac's: a company name that fits there fits
+    everywhere (#838: "Prairie Ridge Builders LLC" wrapped on CI and passed on Windows)."""
     _, pg = page_as("/bd/", AVERY, DESKTOP)
     wait_week(pg)
+    pg.add_style_tag(content='#main, #main * { font-family: "DejaVu Sans", sans-serif !important; }')
     settled(pg)
     heights = pg.locator("#wk-rest .wk-row").evaluate_all("rs => rs.map(r => r.getBoundingClientRect().height)")
     assert heights and max(heights) <= 96, heights
