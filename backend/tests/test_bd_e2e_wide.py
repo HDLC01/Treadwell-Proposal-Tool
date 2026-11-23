@@ -83,6 +83,44 @@ def test_at_1920_a_contacts_side_column_grows(open_page):
     assert side > 360, side
 
 
+HEAD_NEAR = 16  # px: how close a contact row's cell must sit to the heading above it
+
+
+@pytest.mark.parametrize("width", [1920, 2560])
+def test_on_a_wide_window_contact_rows_sit_under_their_headings(open_page, width):
+    """The heading row filling the width is not enough: an open account's contact rows are a different
+    box, so their Status and Last live talk cells must still start under Owner and Last live talk."""
+    pg = open_page("/bd/contacts.html?company=16", CASEY, {"width": width, "height": 1080},
+                   '.ct-acct.is-open[data-acct="16"] .ct-person')
+    left = pg.evaluate("""() => {
+      const x = e => e.getBoundingClientRect().left;
+      const head = {};
+      document.querySelectorAll('.ct-colhead > span').forEach(s => { head[s.textContent] = x(s); });
+      const rows = [...document.querySelectorAll('.ct-acct.is-open .ct-person')];
+      return {owner: head['Owner'], last: head['Last live talk'],
+              status: rows.map(r => x(r.querySelector('.ct-p-status'))),
+              talk: rows.map(r => x(r.querySelector('.ct-p-last')))};
+    }""")
+    assert left["talk"], "the open account shows no contact rows"
+    for talk in left["talk"]:
+        assert abs(talk - left["last"]) <= HEAD_NEAR, (talk, left["last"])
+    for status in left["status"]:
+        assert abs(status - left["owner"]) <= HEAD_NEAR, (status, left["owner"])
+
+
+def test_at_1920_a_contacts_controls_and_history_keep_their_measure(open_page):
+    """A wide card does not stretch the follow-up choice into a bar, or put History's dates a card's
+    width from the words they belong to."""
+    pg = open_page("/bd/contact.html?id=21", AVERY, WIDE, ".cd-layout .cd-side")
+    pg.locator(".cd-tl-when").first.wait_for(timeout=15000)
+    seg = pg.locator(".call-seg").first.bounding_box()["width"]
+    assert seg <= 520, "the follow-up choice is %dpx wide" % seg
+    gaps = pg.evaluate("""() => [...document.querySelectorAll('.cd-tl-item')].map(it => {
+      const when = it.querySelector('.cd-tl-when'), word = it.querySelector('.cd-tl-word');
+      return when && word ? when.getBoundingClientRect().right - word.getBoundingClientRect().left : 0; })""")
+    assert gaps and max(gaps) <= 640, gaps
+
+
 @pytest.mark.parametrize("viewport", [PHONE, NARROWEST], ids=["390", "320"])
 @pytest.mark.parametrize("path,email,ready,content", PAGES, ids=IDS)
 def test_on_a_phone_nothing_scrolls_sideways(open_page, path, email, ready, content, viewport):
