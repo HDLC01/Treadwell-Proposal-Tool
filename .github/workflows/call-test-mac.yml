@@ -1,0 +1,35 @@
+name: Call test app (Mac)
+
+# Builds RJ's call-recording test app on a GitHub Mac machine. Lives on the test-kit branch only;
+# it never runs on staging or main. Download the zip from the run's Artifacts.
+on:
+  push:
+    branches: [test-kit/call-recorder]
+    paths:
+      - 'mac/call-test/**'
+      - '.github/workflows/call-test-mac.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Show the tools
+        run: |
+          sw_vers
+          swiftc --version
+      - name: Build the app
+        run: bash mac/call-test/build.sh
+      - name: Upload the app
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Treadwell-Call-Test
+          path: mac/call-test/build/Treadwell-Call-Test.zip
+          retention-days: 30
