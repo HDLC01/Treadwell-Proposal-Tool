@@ -95,6 +95,9 @@
   --bd-z-callbar: 9990;
 
   --bd-gutter: 28px;
+  /* The side column beside a page's main one (This Week's tray, a contact's side cards): 320px up to a
+     laptop's width, growing with a wide window to 480px so the width is used, not just stretched. */
+  --bd-side: clamp(320px, 22vw, 480px);
 }
 @media (max-width: 767px) {
   .bd-app { --bd-hit: 48px; --bd-gutter: 16px; }
@@ -126,7 +129,10 @@
 
 /* == components == */
 /* ── layout ─────────────────────────────────────────────────────────────────────────────── */
-.bd-app .page { max-width: 1180px; margin: 0; padding: 22px var(--bd-gutter) 64px; }
+/* The whole width beside the tool's sidebar, like the tool's CRM board (portal.html's .wrap): no column
+   cap, so a wide monitor is not a column on the left with empty paper to its right. What reads as text
+   (notes, empty states, hints) keeps its own measure; dialogs and sheets keep their own sizes. */
+.bd-app .page { margin: 0; padding: 22px var(--bd-gutter) 64px; }
 .bd-app .page-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 18px; }
 .bd-app .page-head-row { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
 .bd-app .page-head-row .page-head { margin-bottom: 0; }
@@ -140,7 +146,7 @@
 .bd-app .section-head > :last-child:not(:first-child):not(.section-meta) { margin-left: auto; }
 .bd-app .section-title { margin: 0 0 12px; font-size: 18px; font-weight: 600; line-height: 1.3; color: var(--bd-ink); }
 .bd-app .section-meta { font-size: 14px; color: var(--bd-ink-2); }
-.bd-app .layout-2 { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 24px; align-items: start; }
+.bd-app .layout-2 { display: grid; grid-template-columns: minmax(0, 1fr) var(--bd-side); gap: 24px; align-items: start; }
 .bd-app .wrap-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .bd-app .scroll-row { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; max-width: 100%; overflow-x: auto;
   overscroll-behavior-x: contain; scrollbar-width: thin; -webkit-overflow-scrolling: touch; }
@@ -605,7 +611,7 @@
 }
 
 /* ── the two columns ────────────────────────────────────────────────────────────────────── */
-.bd-app .wk-layout { grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; margin-top: 14px; }
+.bd-app .wk-layout { grid-template-columns: minmax(0, 1fr) var(--bd-side); gap: 16px; margin-top: 14px; }
 .bd-app .wk-layout.wk-solo { grid-template-columns: minmax(0, 1fr); }
 @media (max-width: 1099px) { .bd-app .wk-layout, .bd-app .wk-layout.wk-solo { grid-template-columns: minmax(0, 1fr); } }
 .bd-app .wk-main { container: wk-main / inline-size; min-width: 0; }
@@ -864,7 +870,8 @@
 .bd-app .call-fu { margin-bottom: 8px; }
 .bd-app .call-fu-title { margin-bottom: 10px; font-size: 15px; font-weight: 600; color: var(--bd-ink); }
 .bd-app .call-fu-title .opt { font-weight: 400; }
-.bd-app .call-seg { display: flex; width: 100%; flex-wrap: nowrap; }
+/* three choices, so a wide card does not stretch them into a bar across the page; a phone's card is narrower */
+.bd-app .call-seg { display: flex; width: 100%; max-width: 480px; flex-wrap: nowrap; }
 .bd-app .call-seg > button { flex: 1 1 0; min-width: 0; }
 .bd-app .call-fu-none, .bd-app .call-fu-done { margin-top: 12px; font-size: 13px; color: var(--bd-ink-2); }
 .bd-app .call-fu-done { display: flex; align-items: center; gap: 6px; color: var(--bd-ok); font-weight: 600; }
@@ -913,7 +920,7 @@
 .bd-app .ct-tidy { margin-bottom: 18px; }
 .bd-app .ct-tidy-title { margin: 0 0 10px; font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
   color: var(--bd-ink-2); }
-.bd-app .ct-tidy-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+.bd-app .ct-tidy-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 260px)); gap: 10px; }
 .bd-app .ct-tidy-card { display: flex; align-items: center; gap: 10px; min-height: var(--bd-hit); padding: 10px 12px; text-align: left;
   color: var(--bd-ink); background: var(--bd-card); border: 1px solid var(--bd-line); border-radius: var(--bd-r); cursor: pointer; }
 .bd-app .ct-tidy-card:hover { border-color: var(--bd-ink-3); }
@@ -1017,9 +1024,31 @@
 .bd-app .ct-more, .bd-app .ct-more-gap { flex: none; width: 36px; }
 .bd-app .ct-more[aria-expanded="true"] { color: var(--bd-ink); background: var(--bd-recessed); }
 
+/* A wide window (1440 and up): People, Owner and Last live talk grow with the window as well, so the
+   account name has the most room but the columns spread across the row instead of bunching at its
+   right end. Below 1440 the columns are as they were.
+   The widths are in vw, not fr, so an open account's contact rows (a different box: indented 66px,
+   ending 15px from the card's edge, with a 40px call button and 12px gaps) can line their Status and
+   Last live talk cells up under the Owner and Last live talk headings. Measured from the card's right
+   edge: the headings and the account row end 49px in (1px border, 8px padding, the 36px "more" button
+   and its 4px gap), then the 18px chevron and a 14px gap; the contact row ends 15px in, then the 40px
+   call button and a 12px gap. So the row's last column is 14px wider than the heading's, and its status
+   column is 2px wider than Owner (a 12px gap against 14px). */
+@media (min-width: 1440px) {
+  .bd-app #ct-list { --ct-w-people: max(96px, 8vw); --ct-w-owner: max(200px, 16vw); --ct-w-last: max(112px, 11vw); }
+  .bd-app .ct-colhead, .bd-app .ct-acct-toggle {
+    grid-template-columns: 38px minmax(0, 1fr) var(--ct-w-people) var(--ct-w-owner) var(--ct-w-last) 18px; }
+  .bd-app .ct-colhead { padding-right: 49px; }
+}
+
 .bd-app .ct-people { padding: 4px 14px 4px 66px; background: var(--bd-paper); border-top: 1px solid var(--bd-line); }
 .bd-app .ct-person { display: grid; grid-template-columns: minmax(0, 1.4fr) 116px minmax(0, 1.3fr) minmax(0, 1fr) 96px 40px; gap: 12px;
   align-items: center; padding: 9px 0; font-size: 13px; }
+/* 1440 and up: Status and Last live talk sit under their headings (the widths are worked out above) */
+@media (min-width: 1440px) {
+  .bd-app .ct-person {
+    grid-template-columns: minmax(0, 1.4fr) 116px minmax(0, 1.3fr) calc(var(--ct-w-owner) + 2px) calc(var(--ct-w-last) + 14px) 40px; }
+}
 .bd-app .ct-person + .ct-person { border-top: 1px dashed var(--bd-line); }
 .bd-app .ct-person.is-match { margin: 0 -10px; padding: 9px 10px; border-radius: var(--bd-r); background: var(--bd-warn-bg); }
 .bd-app .ct-person.is-match + .ct-person { border-top-color: transparent; }
@@ -1195,7 +1224,8 @@
   background: var(--bd-recessed); color: var(--bd-ink-2); }
 .bd-app .cd-tl-ico.is-touch { background: var(--bd-ok-bg); color: var(--bd-ok); }
 .bd-app .cd-tl-ico .tw-ico { width: 14px; height: 14px; vertical-align: 0; }
-.bd-app .cd-tl-main { min-width: 0; }
+/* an entry keeps a reading measure on a wide card, so its date sits at the end of its words, not across the card */
+.bd-app .cd-tl-main { min-width: 0; max-width: 72ch; }
 .bd-app .cd-tl-top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2px 12px; min-height: 28px; }
 .bd-app .cd-tl-kind { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .bd-app .cd-tl-word { font-size: 14px; font-weight: 700; line-height: 1.3; }
@@ -1312,7 +1342,7 @@
 .bd-app .ad-meta { margin: -4px 0 12px; }
 .bd-app .ad-form { display: flex; flex-direction: column; gap: 14px; }
 .bd-app .ad-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; max-width: 720px; }
-.bd-app .ad-grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); max-width: none; }
+.bd-app .ad-grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .bd-app .ad-sub-title { font-size: 14px; font-weight: 600; line-height: 1.4; color: var(--bd-ink); }
 .bd-app .ad-sub-text { margin-top: 2px; font-size: 13px; line-height: 1.45; color: var(--bd-ink-2); }
 .bd-app .ad-lock { display: flex; align-items: center; gap: 6px; }
@@ -1351,7 +1381,8 @@
 .bd-app .ad-kv > div { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 4px 16px; align-items: center; }
 .bd-app .ad-kv dt { font-size: 13px; color: var(--bd-ink-2); }
 .bd-app .ad-kv dd { margin: 0; min-width: 0; font-size: 14px; }
-.bd-app .ad-lists { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px 40px; }
+/* every form on Admin is the same 720px block (Add a person, Friday list, Goals, Pick lists); the tables run full width */
+.bd-app .ad-lists { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px 40px; max-width: 720px; }
 .bd-app .ad-list-head { display: flex; align-items: center; gap: 8px; }
 .bd-app .ad-chips { display: flex; flex-wrap: wrap; gap: 10px; margin: 0; padding: 0; list-style: none; }
 .bd-app .ad-chip {
@@ -1394,6 +1425,9 @@
 @media (max-width: 1023px) { .bd-app .ad-lists { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 767px) {
   .bd-app .ad-navbar { position: static; margin: 0 0 14px; padding: 0; }
+  /* a card's title and its button ("Import a workbook") share a row while they fit; at 320 in a wide font
+     (Linux's DejaVu Sans) the button drops under the title instead of pushing the page sideways */
+  .bd-app .ad-sec > .card-head { flex-wrap: wrap; }
   /* the six sections wrap to rows instead of scrolling out of sight */
   .bd-app .ad-nav.tabs { flex-wrap: wrap; overflow: visible; }
   .bd-app .ad-sec { scroll-margin-top: 64px; }
