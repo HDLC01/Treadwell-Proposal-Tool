@@ -382,14 +382,16 @@ def test_a_backdated_call_still_closes_this_weeks_task_at_its_time(bd_seeded, bd
     assert r.json()["task"] == {"id": 304, "status": "done", "done_at": "2026-10-28T10:00:00-05:00"}
 
 
-def test_the_latest_task_of_the_week_is_the_one_closed(bd_seeded, bd_as_user, bd_db):
+def test_every_open_task_of_the_company_this_week_closes_and_the_latest_is_answered(bd_seeded, bd_as_user, bd_db):
+    """#828: a meeting with Rory (22) closes the company's row: his Friday task 304 and a later list's
+    task for him both close, and the answer is the latest of his own."""
     b = bd_db.execute("insert into bd.task_batches (owner_id, week_start, kind) values (2, '2026-11-02', 'ten_more')"
                       " returning id").fetchone()["id"]
     t = bd_db.execute("insert into bd.tasks (batch_id, contact_id, kind) values (%s, 22, 'new') returning id",
                       (b,)).fetchone()["id"]
     r = log(bd_as_user(BLAIR), 22, kind="meeting", occurred_at="2026-11-04T09:00:00-06:00")
     assert r.json()["task"]["id"] == t
-    assert task_row(bd_db, 304)["status"] == "open"
+    assert task_row(bd_db, 304)["status"] == "done"
 
 
 def _maintenance_task(db, cid=31):

@@ -69,7 +69,7 @@ from typing import Any
 
 from fastapi import Body, Depends, Path, Request
 
-from .. import appsettings, auth, bizdate, db, errors, paging, serialize, web, weekly
+from .. import appsettings, auth, bizdate, company_facts, db, errors, paging, serialize, web, weekly
 from ..contacts_service import COMPANY_NOT_FOUND, FIX, default_frequency, lock_companies, too_long
 from ..events import log_event
 from ..normalize import normalize_company
@@ -99,13 +99,6 @@ SORTS = {
     "people": 'acc.people desc, lower(btrim(co.name)) collate "C", co.id',
     "last_live_at": 'live.last_live_at desc nulls last, lower(btrim(co.name)) collate "C", co.id',
 }
-
-# A live talk BD counts, dated on or before today, with someone at company `co` who is not archived.
-_LIVE_AT_COMPANY = (
-    "select max(i.occurred_at) as last_live_at from contacts c2 join interactions i on i.contact_id = c2.id"
-    " where c2.company_id = co.id and c2.archived_at is null and i.counts_as_touch"
-    " and bd_date(i.occurred_at) <= bd_today()")
-
 
 # ── the account list ─────────────────────────────────────────────────────────────────────────
 def _pick_owner(people: list, talks: dict, sellers: set) -> tuple:
@@ -139,7 +132,7 @@ def _accounts(conn, category: str, sort: str, limit: int, offset: int) -> tuple:
         "with acc as (" + acc + ")"
         " select co.id, co.name, co.city, co.industry, acc.people, live.last_live_at"
         " from acc join companies co on co.id = acc.company_id"
-        " left join lateral (" + _LIVE_AT_COMPANY + ") live on true"
+        " left join lateral (" + company_facts.LIVE_AT_COMPANY + ") live on true"
         " order by " + SORTS[sort] + " limit %(limit)s offset %(offset)s", params).fetchall()
     ids = [r["id"] for r in rows]
     people: dict = {i: [] for i in ids}

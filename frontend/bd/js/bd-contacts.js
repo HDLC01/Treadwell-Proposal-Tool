@@ -413,14 +413,14 @@
       '<div class="ct-acct-head">' +
       '<button type="button" class="ct-acct-toggle" id="ct-a-' + tab + "-" + esc(a.id) + '" aria-expanded="' + (open ? "true" : "false") +
       '" aria-controls="' + pid + '">' +
-      '<span class="ct-acct-ico">' + ico("building", 18) + "</span>" +
-      '<span class="ct-acct-main"><span class="ct-acct-name">' + esc(a.name) + "</span>" +
+      BD.coIconHTML() +
+      '<span class="ct-acct-main"><span class="ct-acct-name bd-co-name">' + esc(a.name) + "</span>" +
       '<span class="ct-acct-meta">' + esc(meta) + '<span class="ct-phone-only">' + (meta ? " · " : "") + esc(peopleWord(n)) + "</span></span>" +
       flags(a) + "</span>" +
       '<span class="ct-c-people">' + esc(peopleWord(n)) + "</span>" +
       '<span class="ct-c-owner">' + owner + "</span>" +
       '<span class="ct-c-last">' + esc(lastWords(a.last_live_at)) + "</span>" +
-      '<span class="ct-chev">' + ico("chev-right", 18) + "</span></button>" +
+      BD.coChevHTML() + "</button>" +
       (S.can.move_company === true
         ? '<button type="button" class="btn btn-icon btn-sm ct-more" id="ct-m-' + tab + "-" + esc(a.id) + '" data-more aria-label="More for ' +
           esc(a.name) + '" aria-haspopup="menu" aria-expanded="false">' + ico("more", 20) + "</button>"

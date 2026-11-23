@@ -25,6 +25,8 @@ Objects and the functions that make them:
     Interaction        interaction(row)              INTERACTION_SELECT row
     TaskBatch          task_batch(row)               BATCH_SELECT row
     Task               task(row, contact)            tasks row + an already-serialised ContactCompact
+    WeekRow            week_row(...)                 one company row of This Week (#828)
+    WeekRowPerson      week_row_person(row, ...)     contacts_summary row: one person on a company row
     Recommendation     recommendation(row)           RECOMMENDATION_SELECT row
     FollowupDraft      followup_draft(row)           followup_drafts row
     Candidate          candidate(row)                CANDIDATE_SELECT row
@@ -368,6 +370,54 @@ def task(row: Row, contact: Any = None) -> dict:
         "status": row["status"],
         "done_at": ts(row.get("done_at")),
         "snoozed_until": iso_date(row.get("snoozed_until")),
+    }
+
+
+def week_row_person(row: Row, task_id: Any, not_right_person: bool) -> dict:
+    """One person on a This Week company row (#828), from a contacts_summary row: how to reach them,
+    their own last live talk and tries, any promised call or next step, the task this row holds for
+    them (or None) and whether they were marked not the right person on this row."""
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "title": row.get("title"),
+        "phone": row.get("phone"),
+        "phone_e164": row.get("phone_e164"),
+        "email": row.get("email"),
+        "confirmed": bool(row["confirmed"]),
+        "last_live_at": ts(row.get("last_live_at")),
+        "attempts_since_live": int(row.get("attempts_since_live") or 0),
+        "promised_date": iso_date(row.get("promised_date")),
+        "next_step": row.get("next_step"),
+        "next_step_date": iso_date(row.get("next_step_date")),
+        "task_id": task_id,
+        "not_right_person": bool(not_right_person),
+    }
+
+
+def week_row(section: str, tasks: list, status: str, company: dict, facts: Any, people: list) -> dict:
+    """A company row of This Week (#828). `tasks` are the row's Task objects in list order (the first
+    is the person suggested first: the row's id, kind, reason and score are its), `company` a
+    company_ref, `facts` company_facts.load's Facts, `people` serialised WeekRowPersons."""
+    first = tasks[0]
+    facts = facts or {}
+    return {
+        "id": first["id"],
+        "section": section,
+        "batch_id": first["batch_id"],
+        "task_ids": [t["id"] for t in tasks],
+        "kind": first["kind"],
+        "status": status,
+        "done_at": next((t["done_at"] for t in tasks if t["status"] == "done" and t["done_at"]), None),
+        "snoozed_until": next((t["snoozed_until"] for t in tasks if t["status"] == "snoozed" and t["snoozed_until"]),
+                              None),
+        "reason": first["reason"],
+        "reasons": list(first["reasons"]),
+        "score": first["score"],
+        "company": company,
+        "misses": int(facts.get("misses") or 0),
+        "last_live_at": ts(facts.get("last_live_at")),
+        "people": people,
     }
 
 

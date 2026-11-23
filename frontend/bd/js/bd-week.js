@@ -25,19 +25,30 @@
  * (js/call.js, window.BDCall). The sheet saves the outcome and confirms the next step; this page
  * moves the row to Done and refreshes the counts when it hears back (onChange).
  *
- * Maintenance follow-ups (cadence rules, 2026-11-10): a maintenance contact whose follow-up is due
- * is pinned at the TOP of the owner's list (task kind "maintenance"). It is not one of the 10:
- * "N of 10 done", the dots and the bar count the live Friday batch's business-development tasks
- * only, and a separate "Due now: N maintenance follow-up(s)" line counts the open pinned ones
- * (WeekView due_count). The first one is Next up; the rest sit in a "Due now" group above "Rest of
- * your 10". It cannot be taken off by hand: no "Not this week" and no "Done, nothing to log" (the
- * server answers 409 for both), no Undo on a done one; any logged call, meeting, email or text
- * clears it and moves it to Done.
+ * ONE ROW PER COMPANY (#828). The page draws the WeekView's `rows` (WeekRow: one company's tasks on
+ * one list), never one row per task. A row closed shows the company, the person to call first, the
+ * reason chip and the company's misses; opened (its toggle: a button, so click, Enter or Space, with
+ * aria-expanded) it shows every person on the row with their title, phone, Call, last live talk,
+ * tries and any promised call or next step. Calling someone opens the call sheet on THAT person (it
+ * logs on them; logging with anyone there closes the row). "Not the right person" is per person (its
+ * contact_id goes to the row's task); Done, Not this week and Reopen act on the whole row (any task id
+ * of a row does). Next up is the first open row, drawn as a card, with the others there under it.
+ * "N of 10 done", the dots and the bar count the live Friday batch's rows (section "ten").
  *
- * Hooks the tests use (the plan's 1.4 hook rules): exactly one node per task carries data-task
- * (the Next up card or a list row), with data-status open | done | snoozed; the tracker dots carry
+ * Maintenance follow-ups (cadence rules, 2026-11-10): a maintenance contact whose follow-up is due
+ * is pinned at the TOP of the owner's list (task kind "maintenance"), one row per company (section
+ * "due"). It is not one of the 10: a separate "Due now: N maintenance account(s)" line counts the
+ * open "Due now" rows, companies (WeekView due_count). The first one is Next up; the rest sit in a
+ * "Due now" group above "Rest of your 10". It cannot be taken off by hand: no "Not this week" and no
+ * "Done, nothing to log" (the server answers 409 for both), no Undo on a done one; a logged call,
+ * meeting, email or text for each person due there clears it and moves it to Done.
+ *
+ * Hooks the tests use (the plan's 1.4 hook rules): exactly one node per ROW carries data-task, the
+ * row's id (its first task; the Next up card or a list row), with data-status open | done | snoozed;
+ * a person inside a row carries data-person (their contact id); the tracker dots carry
  * data-dot-task; tray items carry data-contact / data-rec; the menu's choices come back as the
- * "bd-menu" event, never as a click on a .menu node.
+ * "bd-menu" event, never as a click on a .menu node (heard on the document: a refresh that redrew
+ * the row while its menu was open must not lose the choice).
  *
  * Routes (all in docs/bd/api-contract.md): GET /api/bd/week (?owner=, ?week_start=),
  * GET /api/bd/users, GET /api/bd/settings, GET /api/bd/contacts/{id},
@@ -61,7 +72,9 @@
     me: null,          // /api/bd/me's answer (TWAuth.bdMe())
     today: null,       // Central "today" from /api/bd/me
     week: null,        // the WeekView
-    byId: {},          // task id -> task
+    byId: {},          // row id AND every task id of a row -> its WeekRow
+    taskById: {},      // task id -> Task (a row's first task carries the contact's pills)
+    open: {},          // row ids opened in this page view
     details: {},       // contact id -> {contact, timeline, pending, missed}
     // What this person may do: /api/bd/me's can (bd/auth.py can()), never worked out from a role name.
     canAct: false,     // can.send: may call, take off, mark done, ask for more
@@ -80,7 +93,7 @@
     trayOpen: null,    // the contact id whose tray item is open (desktop)
     trayAll: false,    // "Show 2 more" pressed
     moreMsg: "",       // the 409 sentence under Give me 10 more
-    offNow: {},        // task ids taken off in this page view (their Undo is shown)
+    offNow: {},        // row ids taken off in this page view (their Undo is shown)
   };
 
   var main = document.getElementById("main");
@@ -120,8 +133,16 @@
   function setWeek(w) {
     S.week = w;
     S.byId = {};
-    (w.tasks || []).forEach(function (t) { S.byId[t.id] = t; });
+    S.taskById = {};
+    (w.tasks || []).forEach(function (t) { S.taskById[t.id] = t; });
+    rowsOf(w).forEach(function (r) {
+      S.byId[r.id] = r;
+      (r.task_ids || []).forEach(function (id) { if (!S.byId[id]) S.byId[id] = r; });
+    });
   }
+
+  /** The week's company rows (WeekView rows, #828), in the server's order. */
+  function rowsOf(w) { return (w && w.rows) || []; }
 
   function weekPath(weekStart) {
     var q = [];
@@ -142,69 +163,58 @@
     return b;
   }
 
-  /** The live Friday batch's business-development tasks (the latest Friday batch: one a forced
-   *  re-run replaced is still listed, not counted; the pinned maintenance tasks are not one of the
-   *  10). Without a batch list, every task that is not an extra. The "did I do my 10?" headline
-   *  counts only these (WeekView done_count/total). */
-  function fridayTasks() {
-    var w = S.week;
-    var tasks = (w.tasks || []).filter(function (t) { return t.kind !== "maintenance"; });
-    var fri = batches().filter(function (b) { return b.kind === "friday"; }).map(function (b) { return b.id; });
-    if (!fri.length) {
-      var extra = batches().filter(function (b) { return b.kind === "ten_more"; }).map(function (b) { return b.id; });
-      return tasks.filter(function (t) { return extra.indexOf(t.batch_id) === -1; });
-    }
-    var live = fri[fri.length - 1];
-    return tasks.filter(function (t) { return t.batch_id === live; });
+  /** The live Friday batch's rows (section "ten": the latest Friday batch, without its "Due now"
+   *  rows; a batch a forced re-run replaced is still listed, not counted). The "did I do my 10?"
+   *  headline counts only these, companies (WeekView done_count/total). */
+  function fridayRows() {
+    return rowsOf(S.week).filter(function (r) { return r.section === "ten"; });
   }
 
-  /** The "N more (to get ahead)" lists: Give Me 10 More's lists, each holding a BD call. A list the
+  /** The "N more (to get ahead)" lists: Give Me 10 More's lists, each holding a BD row. A list the
    *  server made only to pin a maintenance follow-up (a company made a maintenance account, #810) is
    *  not one: its pin is under "Due now", and it would read "0 more". */
   function extraBatches() {
-    var tasks = (S.week && S.week.tasks) || [];
+    var rows = rowsOf(S.week);
     return batches().filter(function (b) {
-      return b.kind === "ten_more" && tasks.some(function (t) { return t.batch_id === b.id && !isMaint(t); });
+      return b.kind === "ten_more" && rows.some(function (r) { return r.batch_id === b.id && r.section === "more"; });
     });
   }
 
-  function isOpen(t) { return t.status === "open"; }
-  function isMaint(t) { return t.kind === "maintenance"; }
+  function isOpen(r) { return r.status === "open"; }
+  /** A "Due now" row: maintenance follow-ups, pinned above the 10. */
+  function isMaint(r) { return r.section === "due" || r.kind === "maintenance"; }
 
-  /** "Due now": the open maintenance follow-ups on this week's lists (any batch). The server's
-   *  WeekView due_count when it sent one (applyTask keeps it current), else counted here. */
+  /** "Due now": the open "Due now" rows, companies. The server's WeekView due_count when it sent
+   *  one (applyRow keeps it current), else counted here. */
   function dueNow() {
     var w = S.week;
     if (w && typeof w.due_count === "number") return w.due_count;
-    return ((w && w.tasks) || []).filter(function (t) { return isMaint(t) && isOpen(t); }).length;
+    return rowsOf(w).filter(function (r) { return isMaint(r) && isOpen(r); }).length;
   }
 
   /** Everything the page draws, worked out once per paint. */
   function parts() {
-    var tasks = S.week.tasks || [];
-    var fri = fridayTasks();
+    var rows = rowsOf(S.week);
+    var fri = fridayRows();
     var openFri = fri.filter(isOpen);
     var extras = extraBatches();
-    var openExtra = [];
-    extras.forEach(function (b) {
-      tasks.forEach(function (t) { if (t.batch_id === b.id && isOpen(t) && !isMaint(t)) openExtra.push(t); });
-    });
-    // The open pinned follow-ups (any batch, the server's order: they head every list) come first.
-    var maint = tasks.filter(function (t) { return isMaint(t) && isOpen(t); });
+    var openExtra = rows.filter(function (r) { return r.section === "more" && isOpen(r); });
+    // The open "Due now" rows (the server's order: they head every list) come first.
+    var maint = rows.filter(function (r) { return isMaint(r) && isOpen(r); });
     var next = maint[0] || openFri[0] || openExtra[0] || null;
     var order = {};
-    tasks.forEach(function (t, i) { order[t.id] = i; });
-    var done = tasks.filter(function (t) { return t.status === "done"; }).sort(function (a, b) {
+    rows.forEach(function (r, i) { order[r.id] = i; });
+    var done = rows.filter(function (r) { return r.status === "done"; }).sort(function (a, b) {
       var x = String(a.done_at || ""), y = String(b.done_at || "");
       return x < y ? -1 : (x > y ? 1 : order[a.id] - order[b.id]);
     });
-    var off = tasks.filter(function (t) { return t.status === "snoozed"; });
-    var friDone = fri.filter(function (t) { return t.status === "done"; }).length;
-    var friOff = fri.filter(function (t) { return t.status === "snoozed"; }).length;
+    var off = rows.filter(function (r) { return r.status === "snoozed"; });
+    var friDone = fri.filter(function (r) { return r.status === "done"; }).length;
+    var friOff = fri.filter(function (r) { return r.status === "snoozed"; }).length;
     return {
-      tasks: tasks, fri: fri, openFri: openFri, openExtra: openExtra, extras: extras, next: next,
-      maint: maint, due: maint.filter(function (t) { return t !== next; }),
-      rest: openFri.filter(function (t) { return t !== next; }),
+      rows: rows, fri: fri, openFri: openFri, openExtra: openExtra, extras: extras, next: next,
+      maint: maint, due: maint.filter(function (r) { return r !== next; }),
+      rest: openFri.filter(function (r) { return r !== next; }),
       done: done, off: off, friDone: friDone, friOff: friOff,
     };
   }
@@ -213,11 +223,11 @@
    *  data, never the clock: nothing open, something not done, and next week's Friday list already
    *  made (the Friday run closed what was left as snoozed). */
   function weekState(p) {
-    if (!p.tasks.length) return "empty";
+    if (!p.rows.length) return "empty";
     if (p.next) return "normal";
     if (p.fri.length && p.friDone === p.fri.length) return "alldone";
     var nw = S.nextWeek;
-    if (nw && (nw.tasks || []).length) return "finished";
+    if (nw && rowsOf(nw).length) return "finished";
     return "nothingleft";
   }
 
@@ -231,17 +241,34 @@
     return c && c.id != null ? BD.pageHref("/bd/contact.html?id=", c.id, "&from=week") : "";
   }
 
-  /** A row's name and company: a link to the contact page. */
-  function whoHTML(c) {
-    var inner = '<span class="who-name">' + esc(c.name) + "</span>" +
-      '<span class="who-sub">' + esc(c.company ? c.company.name : "") + "</span>";
-    var href = contactHref(c);
-    return href ? '<a class="who wk-who" href="' + esc(href) + '">' + inner + "</a>" : '<span class="who wk-who">' + inner + "</span>";
+  /** The person to call first on a row: its first person (the server puts them on top). */
+  function firstOf(r) { return ((r && r.people) || [])[0] || null; }
+
+  /** A person on a row as a contact: the person, their company, and what their own task's contact
+   *  adds (category, importance, a duplicate flag: what the pills read). `tasks`: task id -> Task
+   *  (next week's, for its preview), else this week's. */
+  function asContact(r, p, tasks) {
+    var out = {};
+    var t = (tasks || S.taskById)[p.task_id];
+    var tc = t && t.contact && t.contact.id === p.id ? t.contact : {};
+    Object.keys(tc).forEach(function (k) { out[k] = tc[k]; });
+    Object.keys(p).forEach(function (k) { if (p[k] != null || out[k] == null) out[k] = p[k]; });
+    out.company = r.company || out.company;
+    return out;
   }
 
-  /** The task's contact, with what GET /api/contacts/{id} added once it has landed. */
-  function contactFor(t) {
-    var c = t.contact || {};
+  /** The person a control belongs to: the data-person around it, else the row's first person. */
+  function personOf(el, r) {
+    var host = el && el.closest ? el.closest("[data-person]") : null;
+    var id = host ? Number(host.getAttribute("data-person")) : null;
+    var ps = (r && r.people) || [];
+    for (var i = 0; i < ps.length; i++) if (ps[i].id === id) return ps[i];
+    return firstOf(r);
+  }
+
+  /** The row's first person as a contact, with what GET /api/contacts/{id} added once it has landed. */
+  function contactFor(r) {
+    var c = asContact(r, firstOf(r) || {});
     var d = S.details[c.id];
     if (!d || !d.contact) return c;
     var out = {};
@@ -250,18 +277,16 @@
     return out;
   }
 
-  /** The contacts whose details the page needs: Next up's (city, last live talk) and every closed
-   *  task's (the done line's outcome, and the tray). */
+  /** The contacts whose details the page needs: Next up's first person (city, last live talk) and
+   *  everyone on a closed row (the done line's outcome, and the tray). */
   function wantedIds() {
     var p = parts();
     var ids = [];
-    if (p.next && p.next.contact) ids.push(p.next.contact.id);
-    p.done.concat(p.off).forEach(function (t) {
-      if (t.contact && ids.indexOf(t.contact.id) === -1) ids.push(t.contact.id);
-    });
+    var add = function (id) { if (id != null && ids.indexOf(id) === -1) ids.push(id); };
+    if (p.next && firstOf(p.next)) add(firstOf(p.next).id);
+    p.done.concat(p.off).forEach(function (r) { (r.people || []).forEach(function (x) { add(x.id); }); });
     return ids;
   }
-
   /** GET /api/contacts/{id} and its timeline for each id (all in parallel). A failure leaves
    *  that contact empty (no outcome, no tray item): these are extras, never an error on screen. */
   function loadDetails(ids, force) {
@@ -305,13 +330,13 @@
   function maybeNextWeek() {
     if (S.nextWeek !== undefined) return;
     var p = parts();
-    if (!p.tasks.length || p.next || !p.fri.length || p.friDone === p.fri.length) return;
+    if (!p.rows.length || p.next || !p.fri.length || p.friDone === p.fri.length) return;
     S.nextWeek = null;
     var monday = nextMonday();
     if (!monday) return;
     BDApi.get(weekPath(monday)).then(function (r) {
       var w = r && r.week;
-      S.nextWeek = w && (w.tasks || []).length ? w : null;
+      S.nextWeek = w && rowsOf(w).length ? w : null;
       if (S.nextWeek) renderAll();
     }, function () { /* no next week to show */ });
   }
@@ -381,25 +406,58 @@
     return "Followed up";
   }
 
-  /** "Talked · Mon, Nov 2" for a done task: the newest call, voicemail, meeting or hosted event
-   *  (or "Not the right person"; for a maintenance follow-up also "Emailed" or "Texted") since
-   *  the week began; "Done" when nothing was logged. Null while the contact's timeline is still
-   *  on its way. */
-  function doneLine(t) {
-    var d = S.details[t.contact && t.contact.id];
-    if (!d) return null;
+  /** "Talked · Mon, Nov 2" for a done row: the newest call, voicemail, meeting or hosted event (or
+   *  "Not the right person"; for a maintenance follow-up also "Emailed" or "Texted") with anyone on
+   *  it since the week began, the person's name first when the row has more than one ("Sue Marlow:
+   *  Voicemail · Mon, Nov 30"); "Done" when nothing was logged. Null while a timeline is still on
+   *  its way. */
+  function doneLine(r) {
     var ws = S.week.week_start;
-    var items = d.timeline || [];
-    for (var i = 0; i < items.length; i++) {
-      var x = items[i];
-      if (BD.bizDateOf(x.at) < ws) break;
-      if (x.type === "event" && x.event && x.event.action === "unconfirmed") return "Not the right person · " + BD.fmtDay(x.at, S.today);
-      if (x.type !== "interaction" || !x.interaction) continue;
-      var it = x.interaction;
-      var word = interactionWord(it, isMaint(t));
-      if (word) return word + " · " + BD.fmtDay(it.occurred_at || x.at, S.today);
+    var people = r.people || [];
+    var best = null;
+    for (var j = 0; j < people.length; j++) {
+      var d = S.details[people[j].id];
+      if (!d) return null;
+      var items = d.timeline || [];
+      for (var i = 0; i < items.length; i++) {
+        var x = items[i], word = null, at = x.at;
+        if (BD.bizDateOf(x.at) < ws) break;
+        if (x.type === "event" && x.event && x.event.action === "unconfirmed") word = "Not the right person";
+        else if (x.type === "interaction" && x.interaction) {
+          word = interactionWord(x.interaction, isMaint(r));
+          at = x.interaction.occurred_at || x.at;
+        }
+        if (!word) continue;
+        if (!best || String(at) > String(best.at)) best = { word: word, at: at, who: people[j] };
+        break;
+      }
     }
-    return "Done" + (t.done_at ? " · " + BD.fmtDay(t.done_at, S.today) : "");
+    if (!best) return "Done" + (r.done_at ? " · " + BD.fmtDay(r.done_at, S.today) : "");
+    return (people.length > 1 ? best.who.name + ": " : "") + best.word + " · " + BD.fmtDay(best.at, S.today);
+  }
+
+  /** The company's misses (#828: voicemails and calls nobody answered, with anyone there, since the
+   *  last live talk with anyone there): "Never reached after 2 tries", "2 tries since the last live
+   *  talk"; "" with none. */
+  function missesWords(r) {
+    var n = Number(r && r.misses) || 0;
+    if (!n) return "";
+    return r.last_live_at ? plural(n, "try", "tries") + " since the last live talk" : "Never reached after " + plural(n, "try", "tries");
+  }
+
+  /** Where one person stands: their own last live talk and tries, then any promised call or next
+   *  step, each a short line. */
+  function personFacts(p) {
+    var n = Number(p.attempts_since_live) || 0;
+    var live = p.last_live_at ? "Last live talk " + BD.fmtDay(p.last_live_at, S.today) : "No live talk yet";
+    var lines = [live + (n ? " · " + plural(n, "try", "tries") + (p.last_live_at ? " since" : "") : "")];
+    var promisedIsStep = p.promised_date && p.promised_date === p.next_step_date;
+    if (p.promised_date && !promisedIsStep) lines.push("Promised a call by " + BD.fmtDay(p.promised_date, S.today));
+    if (p.next_step || p.next_step_date) {
+      lines.push("Next step: " + [p.next_step || "Get in touch", p.next_step_date ? BD.fmtDay(p.next_step_date, S.today) : ""]
+        .filter(Boolean).join(", ") + (promisedIsStep ? " (promised)" : ""));
+    }
+    return lines;
   }
 
   /** "Try again" from "Try Ray again": the action without the person's first name. */
@@ -414,28 +472,31 @@
   // ── the tray: next steps to confirm ──────────────────────────────────────────────────────
 
   /** Every decision left from this week's calls: a pending suggestion made this week and/or a
-   *  missed call this week with no follow-up yet, one item per person, soonest step first. */
+   *  missed call this week with no follow-up yet, one item per person on a closed row, soonest step
+   *  first. */
   function trayItems() {
     if (!S.canSend || !S.week) return [];
     var ws = S.week.week_start;
     var seen = {}, items = [];
-    (S.week.tasks || []).forEach(function (t) {
-      if (t.status === "open" || !t.contact) return;
-      var cid = t.contact.id;
-      if (seen[cid]) return;
-      seen[cid] = true;
-      var d = S.details[cid];
-      if (!d) return;
-      var rec = d.pending && BD.bizDateOf(d.pending.created_at) >= ws ? d.pending : null;
-      var missed = d.missed && BD.bizDateOf(d.missed.occurred_at) >= ws ? d.missed : null;
-      if (!rec && !missed) return;
-      var iid = missed ? missed.interaction_id : rec.interaction_id;
-      var inter = null;
-      (d.timeline || []).some(function (x) {
-        if (x.type === "interaction" && x.interaction && x.interaction.id === iid) { inter = x.interaction; return true; }
-        return false;
+    rowsOf(S.week).forEach(function (r) {
+      if (r.status === "open") return;
+      (r.people || []).forEach(function (p) {
+        var cid = p.id;
+        if (seen[cid]) return;
+        seen[cid] = true;
+        var d = S.details[cid];
+        if (!d) return;
+        var rec = d.pending && BD.bizDateOf(d.pending.created_at) >= ws ? d.pending : null;
+        var missed = d.missed && BD.bizDateOf(d.missed.occurred_at) >= ws ? d.missed : null;
+        if (!rec && !missed) return;
+        var iid = missed ? missed.interaction_id : rec.interaction_id;
+        var inter = null;
+        (d.timeline || []).some(function (x) {
+          if (x.type === "interaction" && x.interaction && x.interaction.id === iid) { inter = x.interaction; return true; }
+          return false;
+        });
+        items.push({ cid: cid, row: r, contact: d.contact || asContact(r, p), rec: rec, missed: missed, interaction: inter });
       });
-      items.push({ cid: cid, task: t, contact: d.contact || t.contact, rec: rec, missed: missed, interaction: inter });
     });
     items.sort(function (a, b) {
       var x = a.rec ? a.rec.due_date : "9999", y = b.rec ? b.rec.due_date : "9999";
@@ -444,10 +505,10 @@
     return items;
   }
 
-  /** The tray has its data: every closed task's details have landed. */
+  /** The tray has its data: the details of everyone on a closed row have landed. */
   function trayReady() {
-    return (S.week.tasks || []).every(function (t) {
-      return t.status === "open" || !t.contact || !!S.details[t.contact.id];
+    return rowsOf(S.week).every(function (r) {
+      return r.status === "open" || (r.people || []).every(function (p) { return !!S.details[p.id]; });
     });
   }
 
@@ -476,7 +537,7 @@
     else if (p.openFri.length) sub = plural(p.openFri.length, "call") + " to go this week.";
     else if (p.maint.length) {
       sub = (p.fri.length && p.friDone === p.fri.length ? "All " + p.fri.length + " done. " : "") +
-        plural(p.maint.length, "maintenance follow-up") + " still due.";
+        plural(p.maint.length, "maintenance account") + " still due.";
     }
     else if (p.fri.length && p.friDone === p.fri.length) sub = "All " + p.fri.length + " done. Nice work.";
     else if (st === "finished") sub = "This week is finished.";
@@ -489,9 +550,9 @@
     var w = S.week;
     var pw = BD.paceWords(w.pace || {}, S.today);
     var year = (w.pace && w.pace.year) || String(S.today || "").slice(0, 4);
-    var fri = fridayTasks();
+    var fri = fridayRows();
     var total = fri.length;
-    var done = fri.filter(function (t) { return t.status === "done"; }).length;
+    var done = fri.filter(function (r) { return r.status === "done"; }).length;
     var mark = pw.target > 0 ? clamp(100 * pw.dueToday / pw.target) : 0;
     var pillKind = pw.state === "behind" ? "warn" : "ok";
 
@@ -515,17 +576,17 @@
       '<p class="wk-pace-words hide-phone" id="pace-words">' + words + "</p>" +
       '<p class="wk-pace-caption hide-phone" id="pace-caption">' + esc(pw.caption) + "</p></div>";
 
-    // Under the headline: the pinned maintenance follow-ups still open. Absent at 0.
+    // Under the headline: the "Due now" companies still open. Absent at 0.
     var due = dueNow();
     var dueLine = due > 0
-      ? '<p class="wk-due-line" id="wk-due-line">' + esc("Due now: " + plural(due, "maintenance follow-up")) + "</p>" : "";
+      ? '<p class="wk-due-line" id="wk-due-line">' + esc("Due now: " + plural(due, "maintenance account")) + "</p>" : "";
     var weekZone;
     if (!total) {
       weekZone = '<div class="wk-week"><p class="wk-zone-label hide-phone">This week</p>' +
         '<p class="wk-count" id="week-count">No list yet</p>' + dueLine + "</div>";
     } else {
-      var news = fri.filter(function (t) { return t.kind === "new"; });
-      var follows = fri.filter(function (t) { return t.kind !== "new"; });
+      var news = fri.filter(function (r) { return r.kind === "new"; });
+      var follows = fri.filter(function (r) { return r.kind !== "new"; });
       var group = function (list, label) {
         if (!list.length) return "";
         var d = list.filter(function (t) { return t.status === "done"; }).length;
@@ -537,7 +598,7 @@
         return '<div class="dots-group"><div class="dots-row">' + sorted.map(function (t) {
           var cls = t.status === "done" ? " is-done" : (t.status === "snoozed" ? " is-off" : "");
           var word = t.status === "done" ? "done" : (t.status === "snoozed" ? "taken off" : "to do");
-          return '<span class="dot' + cls + '" data-dot-task="' + esc(t.id) + '" title="' + esc((t.contact && t.contact.name) + ", " + word) + '"></span>';
+          return '<span class="dot' + cls + '" data-dot-task="' + esc(t.id) + '" title="' + esc((t.company && t.company.name) + ", " + word) + '"></span>';
         }).join("") + '</div><span class="dots-legend hide-phone">' + esc(label + ": " + d + " of " + list.length) + "</span></div>";
       };
       var all = done === total;
@@ -565,10 +626,9 @@
 
   // ── drawing: the lists ───────────────────────────────────────────────────────────────────
 
-  function moreBtnHTML(t, extraCls) {
-    var c = t.contact || {};
+  function moreBtnHTML(label, extraCls) {
     return '<button type="button" class="btn btn-icon wk-more' + (extraCls ? " " + extraCls : "") + '" data-act="more" aria-label="' +
-      esc("More for " + c.name) + '" aria-haspopup="menu" aria-expanded="false">' + icon("more", 20) + "</button>";
+      esc(label) + '" aria-haspopup="menu" aria-expanded="false">' + icon("more", 20) + "</button>";
   }
 
   function callBtnHTML(c) {
@@ -578,45 +638,97 @@
       icon("phone", 20) + "</a>";
   }
 
-  /** One row of the 10 (Rest, an extra group, next week's preview). */
-  function rowHTML(t, opts) {
+  function companyName(r) { return (r && r.company && r.company.name) || ""; }
+
+  /** One person on a company row (opened, or under Next up): name (to their contact page), title
+   *  and phone, their own last live talk and tries, any promised call or next step, and Call. */
+  function personHTML(r, p, tasks) {
+    var c = asContact(r, p, tasks);
+    var href = contactHref(c);
+    var sub = [c.title, phoneOf(c)].filter(Boolean).join(" · ");
+    var flag = p.not_right_person ? BD.pill("warn", "Not the right person") :
+      (p.confirmed === false ? BD.pill("warn", "Needs confirming") : "");
+    var acts = S.canAct ? '<div class="wk-p-acts">' + callBtnHTML(c) + moreBtnHTML("More for " + c.name, "wk-p-more") + "</div>" : "";
+    return '<div class="wk-person" role="listitem" data-person="' + esc(p.id) + '">' + BD.avatarHTML(c.name || "", "sm") +
+      '<div class="wk-p-who">' + (href ? '<a class="wk-p-name" href="' + esc(href) + '">' + esc(c.name) + "</a>" :
+        '<span class="wk-p-name">' + esc(c.name) + "</span>") +
+      (sub ? '<span class="wk-p-sub">' + esc(sub) + "</span>" : "") + "</div>" +
+      '<div class="wk-p-facts">' + personFacts(p).map(function (l) { return "<span>" + esc(l) + "</span>"; }).join("") +
+      (flag ? '<span class="wk-p-flag">' + flag + "</span>" : "") + "</div>" + acts + "</div>";
+  }
+
+  /** An opened row: everyone on it, then the row's own buttons (a "Due now" row says what clears it). */
+  function bodyHTML(r) {
+    var foot = "";
+    if (S.canAct && !isMaint(r) && isOpen(r)) {
+      foot = '<div class="wk-co-foot"><button type="button" class="btn btn-sm" data-act="snooze">' + icon("clock", 16) + "Not this week</button>" +
+        '<button type="button" class="btn btn-sm" data-act="done">' + icon("check", 16) + "Done, nothing to log</button></div>";
+    } else if (isMaint(r) && isOpen(r)) {
+      foot = '<p class="wk-co-note">Stays on your list until you log a call, meeting, email or text with each person due here.</p>';
+    }
+    return '<div class="wk-co-body" id="wk-p-' + esc(r.id) + '"' + (S.open[r.id] ? "" : " hidden") + ">" +
+      '<div class="wk-people" role="list" aria-label="' + esc("People at " + companyName(r)) + '">' +
+      (r.people || []).map(function (p) { return personHTML(r, p); }).join("") + "</div>" + foot + "</div>";
+  }
+
+  /** One company row (Due now, Rest of the 10, an extra 10, next week's preview). Closed: the
+   *  company, the person to call first, the reason chip and the company's misses, with Call for that
+   *  person; its toggle opens everyone there. A preview row has no toggle and no buttons. */
+  function rowHTML(r, opts) {
     var o = opts || {};
-    var c = t.contact || {};
-    var hook = o.preview ? ' data-preview-task="' + esc(t.id) + '"' : ' data-task="' + esc(t.id) + '" data-status="' + esc(t.status) + '"';
-    var reason = reasonOf(t);
+    var first = firstOf(r) || {};
+    var c = asContact(r, first, o.tasks);
+    var maint = isMaint(r);
+    var hook = o.preview ? ' data-preview-task="' + esc(r.id) + '"'
+      : ' data-task="' + esc(r.id) + '" data-status="' + esc(r.status) + '" data-company="' + esc(r.company && r.company.id) + '"';
+    var reason = reasonOf(r);
     // A pinned maintenance follow-up says "Maintenance · due" (the neutral "Maintenance" pill would repeat it,
     // but a warning or Key account pill still shows beside it).
-    var status = BD.statusPill(c, t.reasons, isMaint(t));
-    var pill = (isMaint(t) ? BD.kindPill(t) : "") + status;
-    var two = isMaint(t) && status !== "";   // two pills: the middle column gives the pill cell more room
+    var status = BD.statusPill(c, r.reasons, maint);
+    var pill = (maint ? BD.kindPill(r) : "") + status;
+    var two = maint && status !== "";   // two pills: the middle column gives the pill cell more room
     // Admin acts AND picks: the manager's "Priority N" caption goes under the pill.
-    if (!o.preview && S.canAct && S.canPick && t.score != null && !isMaint(t)) pill += '<span class="wk-score">' + esc("Priority " + t.score) + "</span>";
+    if (!o.preview && S.canAct && S.canPick && r.score != null && !maint) pill += '<span class="wk-score">' + esc("Priority " + r.score) + "</span>";
     var acts;
     // No phone number: More stays on a phone too, where it takes the call column (bd.css
-    // .wk-row-nophone), or a phone user could not take the task off, mark it done or flag the person.
+    // .wk-row-nophone), or a phone user could not take the row off, mark it done or flag the person.
     var noPhone = !o.preview && S.canAct && !BD.telHref(c);
     if (o.preview) {
       acts = '<span class="wk-row-meta">' + esc(phoneOf(c)) + "</span>";
     } else if (S.canAct) {
-      acts = '<span class="wk-row-call">' + callBtnHTML(c) + "</span>" + moreBtnHTML(t, (noPhone ? "" : "hide-phone ") + "wk-row-more");
+      acts = '<span class="wk-row-call">' + callBtnHTML(c) + "</span>" +
+        moreBtnHTML("More for " + companyName(r), (noPhone ? "" : "hide-phone ") + "wk-row-more");
     } else {
       acts = '<span class="wk-row-meta"><span>' + esc(phoneOf(c)) + "</span>" +
-        (S.canPick && t.score != null && !isMaint(t) ? '<span class="wk-score">' + esc("Priority " + t.score) + "</span>" : "") + "</span>";
+        (S.canPick && r.score != null && !maint ? '<span class="wk-score">' + esc("Priority " + r.score) + "</span>" : "") + "</span>";
     }
-    return '<li class="list-row wk-row' + (two ? " wk-row-two" : "") + (noPhone ? " wk-row-nophone" : "") +
+    var n = (r.people || []).length;
+    var firstLine = [first.name, first.title].filter(Boolean).join(" · ") + (n > 1 ? " · +" + (n - 1) + " more" : "");
+    var misses = missesWords(r);
+    var main = BD.coIconHTML() +
+      '<span class="wk-co-main"><span class="wk-co-name bd-co-name">' + esc(companyName(r)) + "</span>" +
+      '<span class="wk-co-first">' + esc(firstLine) + "</span>" +
+      (misses ? '<span class="wk-co-misses">' + esc(misses) + "</span>" : "") + "</span>";
+    var opened = !o.preview && !!S.open[r.id];
+    var toggle = o.preview ? '<span class="wk-co-toggle is-static">' + main + "</span>"
+      : '<button type="button" class="wk-co-toggle" data-act="toggle" id="wk-t-' + esc(r.id) + '" aria-expanded="' + opened +
+        '" aria-controls="wk-p-' + esc(r.id) + '">' + main + BD.coChevHTML() + "</button>";
+    return '<li class="list-row wk-row wk-co' + (opened ? " is-open" : "") + (two ? " wk-row-two" : "") + (noPhone ? " wk-row-nophone" : "") +
       (S.canAct && !o.preview ? "" : " is-readonly") + '"' + hook + ">" +
-      BD.avatarHTML(c.name || "", "") +
-      whoHTML(c) +
+      '<div class="wk-co-head">' + toggle +
       '<span class="wk-reason">' + reasonHTML(reason) + "</span>" +
-      '<span class="wk-pill">' + pill + "</span>" + acts + "</li>";
+      '<span class="wk-pill">' + pill + "</span>" + acts + "</div>" +
+      (o.preview ? "" : bodyHTML(r)) + "</li>";
   }
 
-  function nextHTML(t) {
-    var c = contactFor(t);
+  function nextHTML(r) {
+    var c = contactFor(r);
+    var first = firstOf(r) || {};
     var d = S.details[c.id];
-    var reason = reasonOf(t);
-    var kind = BD.kindPill(t);
-    var metaWide = [c.title, c.company && c.company.name, c.city].filter(Boolean).join(" · ");
+    var reason = reasonOf(r);
+    var kind = BD.kindPill(r);
+    var maint = isMaint(r);
+    var metaWide = [c.title, companyName(r), c.city].filter(Boolean).join(" · ");
     var acts = "";
     if (S.canAct) {
       var href = BD.telHref(c);
@@ -625,12 +737,12 @@
           ? '<a class="btn btn-primary wk-call" href="' + esc(href) + '" data-act="call">' + icon("phone", 18) + esc("Call " + phoneOf(c)) + "</a>"
           : '<button type="button" class="btn" disabled>No phone number</button>') +
         // A pinned maintenance follow-up cannot be taken off by hand: no "Not this week".
-        (isMaint(t) ? "" : '<button type="button" class="btn hide-phone" data-act="snooze">' + icon("clock", 18) + "Not this week</button>") +
-        moreBtnHTML(t, "wk-next-more") + "</div>" +
-        (isMaint(t) ? '<p class="wk-next-stays">Stays on your list until you log a call, meeting, email or text.</p>' : "") +
-        (S.canPick && t.score != null && !isMaint(t) ? '<p class="wk-score wk-next-score">' + esc("Priority " + t.score) + "</p>" : "");
+        (maint ? "" : '<button type="button" class="btn hide-phone" data-act="snooze">' + icon("clock", 18) + "Not this week</button>") +
+        moreBtnHTML("More for " + c.name, "wk-next-more") + "</div>" +
+        (maint ? '<p class="wk-next-stays">Stays on your list until you log a call, meeting, email or text.</p>' : "") +
+        (S.canPick && r.score != null && !maint ? '<p class="wk-score wk-next-score">' + esc("Priority " + r.score) + "</p>" : "");
     } else {
-      acts = '<p class="wk-next-phone">' + esc([phoneOf(c), S.canPick && t.score != null && !isMaint(t) ? "Priority " + t.score : ""].filter(Boolean).join(" · ")) + "</p>";
+      acts = '<p class="wk-next-phone">' + esc([phoneOf(c), S.canPick && r.score != null && !maint ? "Priority " + r.score : ""].filter(Boolean).join(" · ")) + "</p>";
     }
     var live = d ? lastLive(d) : null;
     var side, line;
@@ -647,8 +759,15 @@
         (live.summary ? '<p class="wk-next-sum">' + esc(live.summary) + "</p>" : "");
       line = esc("Last talk " + monthDay(live.occurred_at) + (live.summary ? ": " + String(live.summary).replace(/\.+$/, "") : ""));
     }
+    // The company's misses, and the person's promised call or next step (their last live talk is beside).
+    var more = [missesWords(r)].concat(personFacts(first).slice(1)).filter(Boolean);
+    var others = (r.people || []).slice(1);
+    var also = others.length
+      ? '<div class="wk-next-also"><p class="wk-next-label2" id="wk-next-also-h">' + esc("Also at " + companyName(r)) + "</p>" +
+        '<div class="wk-people" role="list" aria-labelledby="wk-next-also-h">' +
+        others.map(function (p) { return personHTML(r, p); }).join("") + "</div></div>" : "";
     return '<section class="wk-next-sec" id="wk-next" aria-labelledby="wk-next-name">' +
-      '<article class="card wk-next" data-task="' + esc(t.id) + '" data-status="open">' +
+      '<article class="card wk-next" data-task="' + esc(r.id) + '" data-status="open" data-company="' + esc(r.company && r.company.id) + '">' +
       '<div class="wk-next-main">' +
       '<div class="wk-next-top"><p class="wk-next-label">Next up</p><span class="wk-next-kind-top">' + kind + "</span></div>" +
       '<div class="wk-next-who">' + BD.avatarHTML(c.name || "", "lg") +
@@ -656,14 +775,15 @@
       (contactHref(c) ? '<a href="' + esc(contactHref(c)) + '">' + esc(c.name) + "</a>" : esc(c.name)) + "</h2>" +
       '<span class="wk-next-kind">' + kind + "</span></div>" +
       '<p class="wk-next-meta wk-meta-wide">' + esc(metaWide) + "</p>" +
-      '<p class="wk-next-meta wk-meta-narrow"><span>' + esc(c.company ? c.company.name : "") + "</span>" +
+      '<p class="wk-next-meta wk-meta-narrow"><span>' + esc(companyName(r)) + "</span>" +
       (c.title ? "<span>" + esc(c.title) + "</span>" : "") + "</p></div></div>" +
       (reason ? '<p class="wk-next-reason">' + icon("calendar", 18) + "<span>" + esc(reason) + "</span></p>" : "") +
       '<p class="wk-next-line">' + line + "</p>" +
+      more.map(function (l) { return '<p class="wk-next-fact">' + esc(l) + "</p>"; }).join("") +
       acts + "</div>" +
       '<div class="wk-next-side"><p class="wk-next-label2">Last live talk</p>' + side +
       (contactHref(c) ? '<a class="btn-link wk-next-open" href="' + esc(contactHref(c)) + '">' + esc("Open " + c.name) + icon("arrow-right", 16) + "</a>" : "") +
-      "</div>" +
+      "</div>" + also +
       "</article></section>";
   }
 
@@ -692,13 +812,13 @@
     return '<section class="wk-next-sec" id="wk-next" aria-label="This week"><div class="card wk-end' + (st === "alldone" ? " is-all" : "") + '">' + h + "</div></section>";
   }
 
-  /** "Due now": the other open maintenance follow-ups, from any batch of the week, above the 10. */
+  /** "Due now": the other open maintenance companies, from any batch of the week, above the 10. */
   function dueHTML(p) {
     if (!p.due.length) return "";
     return '<section class="section wk-due" id="wk-due" aria-labelledby="wk-due-h">' +
       '<div class="section-head"><h2 class="section-title" id="wk-due-h">Due now</h2>' +
       '<span class="section-meta">' + esc(p.due.length + " to go") + "</span></div>" +
-      '<div class="card card-flush"><ul class="list wk-list wk-due-list">' + p.due.map(function (t) { return rowHTML(t); }).join("") + "</ul></div></section>";
+      '<div class="card card-flush"><ul class="list wk-list wk-due-list">' + p.due.map(function (r) { return rowHTML(r); }).join("") + "</ul></div></section>";
   }
 
   function restHTML(p) {
@@ -706,27 +826,26 @@
     return '<section class="section wk-rest" id="wk-rest" aria-labelledby="wk-rest-h">' +
       '<div class="section-head"><h2 class="section-title" id="wk-rest-h">' + (own() ? "Rest of your 10" : "Rest of the 10") + "</h2>" +
       '<span class="section-meta">' + esc(p.rest.length + " to go") + "</span></div>" +
-      '<div class="card card-flush"><ul class="list wk-list">' + p.rest.map(function (t) { return rowHTML(t); }).join("") + "</ul></div></section>";
+      '<div class="card card-flush"><ul class="list wk-list">' + p.rest.map(function (r) { return rowHTML(r); }).join("") + "</ul></div></section>";
   }
 
   function extrasHTML(p) {
-    var tasks = p.tasks;
     var list = p.extras;
     return list.map(function (b, i) {
-      var mine = tasks.filter(function (t) { return t.batch_id === b.id && !isMaint(t); });
-      var d = mine.filter(function (t) { return t.status === "done"; }).length;
-      var open = mine.filter(function (t) { return isOpen(t) && t !== p.next; });
+      var mine = p.rows.filter(function (r) { return r.batch_id === b.id && r.section === "more"; });
+      var d = mine.filter(function (r) { return r.status === "done"; }).length;
+      var open = mine.filter(function (r) { return isOpen(r) && r !== p.next; });
       var title = mine.length + " more (to get ahead)" + (list.length > 1 ? " (" + (i + 1) + ")" : "");
       return '<section class="section wk-extra" data-batch="' + esc(b.id) + '" aria-labelledby="wk-g' + esc(b.id) + '">' +
         '<div class="section-head"><h2 class="section-title" id="wk-g' + esc(b.id) + '" tabindex="-1">' + esc(title) + "</h2>" +
         '<span class="section-meta">' + esc(d + " of " + mine.length + " extra done") + "</span></div>" +
-        (open.length ? '<div class="card card-flush"><ul class="list wk-list">' + open.map(function (t) { return rowHTML(t); }).join("") + "</ul></div>" : "") +
+        (open.length ? '<div class="card card-flush"><ul class="list wk-list">' + open.map(function (r) { return rowHTML(r); }).join("") + "</ul></div>" : "") +
         "</section>";
     }).join("");
   }
 
   function trayBannerHTML() {
-    if (!S.canSend || !S.week || !(S.week.tasks || []).length) return "";
+    if (!S.canSend || !S.week || !rowsOf(S.week).length) return "";
     if (!trayReady()) return '<div class="section show-phone"><div class="skeleton wk-skel-banner"></div></div>';
     var items = trayItems();
     if (!items.length) return "";
@@ -738,25 +857,34 @@
       '<span class="who-sub">' + esc(sub) + "</span></span>" + icon("chev-right", 20) + "</button></div>";
   }
 
-  function doneRowHTML(t) {
-    var c = t.contact || {};
-    var line = doneLine(t);
+  /** A closed row's company and its people, each name a link to their contact page. */
+  function coWhoHTML(r) {
+    var ps = r.people || [];
+    var names = ps.slice(0, 2).map(function (p) {
+      var href = contactHref(p);
+      return href ? '<a href="' + esc(href) + '">' + esc(p.name) + "</a>" : esc(p.name);
+    }).join(", ") + (ps.length > 2 ? esc(" +" + (ps.length - 2) + " more") : "");
+    return '<span class="who wk-who"><span class="who-name">' + esc(companyName(r)) + "</span>" +
+      '<span class="who-sub">' + names + "</span></span>";
+  }
+
+  function doneRowHTML(r) {
+    var line = doneLine(r);
     // No Undo on a done maintenance follow-up: reopening it would leave a pin nobody can clear.
-    var undo = S.canAct && !isMaint(t) && BD.bizDateOf(t.done_at) === S.today
-      ? '<button type="button" class="btn-link wk-undo" data-act="reopen" aria-label="' + esc("Undo for " + c.name) + '">Undo</button>' : "";
-    return '<li class="list-row wk-row wk-done-row is-done" data-task="' + esc(t.id) + '" data-status="done">' +
-      BD.avatarHTML(c.name || "", "", "done") +
-      whoHTML(c) +
+    var undo = S.canAct && !isMaint(r) && BD.bizDateOf(r.done_at) === S.today
+      ? '<button type="button" class="btn-link wk-undo" data-act="reopen" aria-label="' + esc("Undo for " + companyName(r)) + '">Undo</button>' : "";
+    return '<li class="list-row wk-row wk-done-row is-done" data-task="' + esc(r.id) + '" data-status="done">' +
+      BD.avatarHTML(companyName(r), "", "done") +
+      coWhoHTML(r) +
       '<span class="wk-outcome">' + (line == null ? '<span class="skeleton wk-skel-short"></span>' : esc(line)) + "</span>" + undo + "</li>";
   }
 
-  function offRowHTML(t) {
-    var c = t.contact || {};
-    var undo = S.canAct && S.offNow[t.id]
-      ? '<button type="button" class="btn-link wk-undo" data-act="reopen" aria-label="' + esc("Undo for " + c.name) + '">Undo</button>' : "";
-    return '<li class="list-row wk-row wk-done-row is-off" data-task="' + esc(t.id) + '" data-status="snoozed">' +
-      BD.avatarHTML(c.name || "", "", "off") +
-      whoHTML(c) +
+  function offRowHTML(r) {
+    var undo = S.canAct && S.offNow[r.id]
+      ? '<button type="button" class="btn-link wk-undo" data-act="reopen" aria-label="' + esc("Undo for " + companyName(r)) + '">Undo</button>' : "";
+    return '<li class="list-row wk-row wk-done-row is-off" data-task="' + esc(r.id) + '" data-status="snoozed">' +
+      BD.avatarHTML(companyName(r), "", "off") +
+      coWhoHTML(r) +
       '<span class="wk-outcome">Not this week</span>' + undo + "</li>";
   }
 
@@ -778,8 +906,8 @@
     if (notReached.length) {
       reached = '<p class="wk-notreached">' + esc(notReached.length + " not reached this week. They go back on the list and can come up again.") +
         ' <button type="button" class="btn-link" data-act="show-names" aria-expanded="' + S.showNames + '">' + (S.showNames ? "Hide names" : "Show names") + "</button></p>" +
-        (S.showNames ? '<ul class="wk-names">' + notReached.map(function (t) {
-          return '<li data-task="' + esc(t.id) + '" data-status="snoozed">' + esc(t.contact && t.contact.name) + "</li>";
+        (S.showNames ? '<ul class="wk-names">' + notReached.map(function (r) {
+          return '<li data-task="' + esc(r.id) + '" data-status="snoozed">' + esc(companyName(r)) + "</li>";
         }).join("") + "</ul>" : "");
     }
     return '<section class="section wk-done" id="wk-done" aria-labelledby="wk-done-h">' +
@@ -798,10 +926,12 @@
   function previewHTML() {
     var nw = S.nextWeek;
     if (!S.preview || !nw) return "";
+    var tasks = {};
+    (nw.tasks || []).forEach(function (t) { tasks[t.id] = t; });
     return '<section class="section wk-preview" id="wk-preview" aria-labelledby="wk-preview-h">' +
       '<div class="section-head"><h2 class="section-title" id="wk-preview-h" tabindex="-1">Next week\'s 10</h2>' +
       '<span class="section-meta">Calls open on Monday.</span></div>' +
-      '<div class="card card-flush"><ul class="list wk-list">' + (nw.tasks || []).map(function (t) { return rowHTML(t, { preview: true }); }).join("") +
+      '<div class="card card-flush"><ul class="list wk-list">' + rowsOf(nw).map(function (r) { return rowHTML(r, { preview: true, tasks: tasks }); }).join("") +
       "</ul></div></section>";
   }
 
@@ -829,12 +959,15 @@
   }
 
   /** Where focus is inside the lists, as a selector that finds the same control after a repaint
-   *  (a row's button by its task, or an id). */
+   *  (a row's button by its row and person, or an id). */
   function focusKey() {
     var a = document.activeElement;
     if (!a || !main.contains(a) || a === main) return null;
-    var host = a.closest("[data-task]"), act = a.getAttribute("data-act");
-    if (host && act) return '[data-task="' + host.getAttribute("data-task") + '"] [data-act="' + act + '"]';
+    var host = a.closest("[data-task]"), act = a.getAttribute("data-act"), who = a.closest("[data-person]");
+    if (host && act) {
+      return '[data-task="' + host.getAttribute("data-task") + '"] ' +
+        (who ? '[data-person="' + who.getAttribute("data-person") + '"] ' : "") + '[data-act="' + act + '"]';
+    }
     if (a.id) return "#" + a.id;
     if (act) return '[data-act="' + act + '"]';
     return null;
@@ -867,7 +1000,7 @@
 
   function renderTray() {
     if (!S.week) return;
-    var show = S.canSend && (S.week.tasks || []).length > 0;
+    var show = S.canSend && rowsOf(S.week).length > 0;
     trayEl.hidden = !show;
     layoutEl.classList.toggle("wk-solo", !show);
     if (!show) { trayEl.innerHTML = ""; return; }
@@ -938,60 +1071,100 @@
 
   // ── actions ──────────────────────────────────────────────────────────────────────────────
 
-  function applyTask(t, x) {
-    if (!t || !x) return;
-    if (x.status) t.status = x.status;
-    if ("done_at" in x) t.done_at = x.done_at;
-    if ("snoozed_until" in x) t.snoozed_until = x.snoozed_until;
+  /** What a task button answered (the row's first task: done, snooze and reopen act on the whole
+   *  row), on the row. */
+  function applyRow(r, x) {
+    if (!r || !x) return;
+    if (x.status) r.status = x.status;
+    if ("done_at" in x) r.done_at = x.done_at;
+    if ("snoozed_until" in x) r.snoozed_until = x.snoozed_until;
     // "Due now" follows the change at once (the next refresh brings the server's own number).
-    if (S.week && typeof S.week.due_count === "number" && isMaint(t)) {
-      S.week.due_count = (S.week.tasks || []).filter(function (y) { return isMaint(y) && isOpen(y); }).length;
+    if (S.week && typeof S.week.due_count === "number" && isMaint(r)) {
+      S.week.due_count = rowsOf(S.week).filter(function (y) { return isMaint(y) && isOpen(y); }).length;
     }
   }
 
-  function taskOf(el) {
+  function rowOf(el) {
     var host = el && el.closest ? el.closest("[data-task]") : null;
     return host ? S.byId[Number(host.getAttribute("data-task"))] || null : null;
   }
+
+  function idsOf(r) { return (r.people || []).map(function (p) { return p.id; }); }
 
   function focusLater(sel) {
     var n = sel ? $(sel) : null;
     if (n) { try { n.focus({ preventScroll: true }); } catch (e) { n.focus(); } }
   }
 
-  /** Open the after-a-call sheet for a task: "call" (from a Call link), "meeting" or "nrp". */
-  function openCall(t, mode) {
-    if (!S.canAct || !window.BDCall) return;
-    var c = contactFor(t);
-    if (mode === "call") BD.store.set(CALL_KEY, { contact_id: c.id, task_id: t.id, at: Date.now() }, { session: true });
+  /** Open or close a row in place: the same toggle keeps focus and says open or closed
+   *  (aria-expanded), and the people are shown or hidden. */
+  function toggleRow(btn) {
+    var r = rowOf(btn);
+    if (!r) return;
+    var on = !S.open[r.id];
+    if (on) S.open[r.id] = true; else delete S.open[r.id];
+    btn.setAttribute("aria-expanded", String(on));
+    var li = btn.closest("[data-task]");
+    if (li) li.classList.toggle("is-open", on);
+    var body = document.getElementById("wk-p-" + r.id);
+    if (body) body.hidden = !on;
+  }
+
+  /** Open the after-a-call sheet for a person on a row: "call" (from a Call link), "meeting" or
+   *  "nrp". It logs on THAT person; the row's task goes with it (not the right person names them). */
+  function openCall(r, p, mode) {
+    if (!S.canAct || !window.BDCall || !p) return;
+    var c = p === firstOf(r) ? contactFor(r) : asContact(r, p);
+    var t = S.taskById[r.id] || { id: r.id };
+    if (mode === "call") BD.store.set(CALL_KEY, { contact_id: c.id, task_id: r.id, at: Date.now() }, { session: true });
     window.BDCall.open({
       contact: c, task: t, mode: mode, startedAt: mode === "call" ? BD.bizNowISO() : null,
       aiEnabled: S.ai, canSend: S.canSend,
-      returnFocus: function () { return callFocusTarget(t); },
-      onChange: function (ev) { onCallChange(t, c, ev); },
+      returnFocus: function () { return callFocusTarget(r); },
+      onChange: function (ev) { onCallChange(r, c, ev); },
     });
   }
 
-  /** Where focus goes when the call sheet closes after a save redrew the row it was opened from:
-   *  the row's Undo, else the next Call, else the first Call on the page, else the heading. */
-  function callFocusTarget(t) {
+  /** The first of `sels` that is on show (a hidden Undo in the closed Done section on a phone is
+   *  not), else the next thing on show: Next up's Call, any Call, the Done toggle, the heading. */
+  function shownTarget(sels) {
     var shown = function (sel) {
       return Array.prototype.filter.call(document.querySelectorAll(sel), function (n) { return n.getClientRects().length > 0; })[0] || null;
     };
-    return shown('[data-task="' + t.id + '"] [data-act="reopen"]') || shown('[data-task="' + t.id + '"] [data-act="call"]') ||
-      shown('#wk-next [data-act="call"]') || shown('#lists [data-act="call"]') || shown(".wk-done-toggle") || $("main h1");
+    var all = sels.concat(['#wk-next [data-act="call"]', '#lists [data-act="call"]', ".wk-done-toggle"]);
+    for (var i = 0; i < all.length; i++) {
+      var n = shown(all[i]);
+      if (n) return n;
+    }
+    return $("main h1");
   }
 
-  function onCallChange(t, c, ev) {
+  /** Focus the first of `sels` on show (shownTarget), so focus never drops to <body> after a redraw. */
+  function focusShown(sels) {
+    var n = shownTarget(sels);
+    if (!n) return;
+    if (n.tagName === "H1" && !n.hasAttribute("tabindex")) n.setAttribute("tabindex", "-1");
+    try { n.focus({ preventScroll: true }); } catch (e) { n.focus(); }
+  }
+
+  /** Where focus goes when the call sheet closes after a save redrew the row it was opened from:
+   *  the row's Undo, else its Call, else shownTarget's next thing on show. */
+  function callFocusTarget(r) {
+    return shownTarget(['[data-task="' + r.id + '"] [data-act="reopen"]', '[data-task="' + r.id + '"] [data-act="call"]']);
+  }
+
+  function onCallChange(r, c, ev) {
     BD.store.del(CALL_KEY, { session: true });
-    var r = ev && ev.result;
-    if (!r) return;                                   // closed with nothing sent: nothing changed
-    if (r.task && r.task.id === t.id) applyTask(t, r.task);
+    var res = ev && ev.result;
+    if (!res) return;                                 // closed with nothing sent: nothing changed
+    // A logged call closes a business-development row whole; on a "Due now" row with someone else
+    // still due it closes only that person's follow-up, so the refresh says what the row is now.
+    if (res.task && S.byId[res.task.id] === r && (!isMaint(r) || (r.task_ids || []).length < 2)) applyRow(r, res.task);
     refreshAll([c.id]).then(function () {
       // The redraw replaced the focused element: put focus back on the row, not on <body>.
       var a = document.activeElement;
       if (window.BDCall.isOpen() || (a && a !== document.body && document.contains(a))) return;
-      var n = callFocusTarget(t);
+      var n = callFocusTarget(r);
       if (n) {
         if (n.tagName === "H1" && !n.hasAttribute("tabindex")) n.setAttribute("tabindex", "-1");
         try { n.focus({ preventScroll: true }); } catch (e) { n.focus(); }
@@ -1004,44 +1177,46 @@
     if (!S.canAct || !window.BDCall || window.BDCall.isOpen()) return;
     var rec = BD.store.get(CALL_KEY, { session: true });
     if (!rec) return;
-    var t = S.byId[rec.task_id];
-    if (!t || t.status !== "open" || !(Date.now() - Number(rec.at) < CALL_KEEP_MS)) {
+    var r = S.byId[rec.task_id];
+    var p = r ? (r.people || []).filter(function (x) { return x.id === rec.contact_id; })[0] : null;
+    if (!r || !p || r.status !== "open" || !(Date.now() - Number(rec.at) < CALL_KEEP_MS)) {
       BD.store.del(CALL_KEY, { session: true });
       return;
     }
-    openCall(t, "call");
+    openCall(r, p, "call");
   }
 
-  function doDone(t, btn) {
-    run(btn, function () { return BDApi.post(BDApi.path("tasks", t.id, "done")); }).then(function (r) {
-      if (!r) return;
-      applyTask(t, r.task);
+  function doDone(r, btn) {
+    run(btn, function () { return BDApi.post(BDApi.path("tasks", r.id, "done")); }).then(function (res) {
+      if (!res) return;
+      applyRow(r, res.task);
       renderAll();
-      focusLater('[data-task="' + t.id + '"] [data-act="reopen"]');
-      toast("Done. Nothing logged.", { action: { label: "Undo", onClick: function () { doReopen(t, null); } } });
-      refreshAll([t.contact.id]);
+      focusShown(['[data-task="' + r.id + '"] [data-act="reopen"]']);
+      toast("Done. Nothing logged.", { action: { label: "Undo", onClick: function () { doReopen(r, null); } } });
+      refreshAll(idsOf(r));
     });
   }
 
-  function doSnooze(t, btn) {
-    run(btn, function () { return BDApi.post(BDApi.path("tasks", t.id, "snooze"), {}); }).then(function (r) {
-      if (!r) return;
-      applyTask(t, r.task);
-      S.offNow[t.id] = true;
+  function doSnooze(r, btn) {
+    run(btn, function () { return BDApi.post(BDApi.path("tasks", r.id, "snooze"), {}); }).then(function (res) {
+      if (!res) return;
+      applyRow(r, res.task);
+      S.offNow[r.id] = true;
       renderAll();
-      focusLater("#wk-next [data-act=\"call\"]");
-      toast("Taken off this week.", { action: { label: "Undo", onClick: function () { doReopen(t, null); } } });
-      refreshAll([t.contact.id]);
+      focusShown([]);                               // Next up's Call, else the next thing on show
+      toast("Taken off this week.", { action: { label: "Undo", onClick: function () { doReopen(r, null); } } });
+      refreshAll(idsOf(r));
     });
   }
 
-  function doReopen(t, btn) {
-    run(btn, function () { return BDApi.post(BDApi.path("tasks", t.id, "reopen")); }).then(function (r) {
-      if (!r) return;
-      applyTask(t, r.task);
-      delete S.offNow[t.id];
+  function doReopen(r, btn) {
+    run(btn, function () { return BDApi.post(BDApi.path("tasks", r.id, "reopen")); }).then(function (res) {
+      if (!res) return;
+      applyRow(r, res.task);
+      delete S.offNow[r.id];
       renderAll();
-      focusLater('[data-task="' + t.id + '"] [data-act="call"]');
+      focusShown(['[data-task="' + r.id + '"] [data-act="call"]', '[data-task="' + r.id + '"] [data-act="toggle"]']);
+      BD.announce(companyName(r) + " is back on the list.");
       refreshAll([]);
     });
   }
@@ -1049,7 +1224,7 @@
   function tenMore(btn) {
     var w = S.week;
     var body = w.owner && w.owner.id != null ? { owner: w.owner.id } : {};
-    var before = (w.tasks || []).length;
+    var before = rowsOf(w).length;
     if (btn.classList.contains("is-busy")) return;
     btn.classList.add("is-busy"); btn.setAttribute("aria-busy", "true");
     BDApi.post("/api/bd/week/ten-more", body).then(function (r) {
@@ -1057,8 +1232,8 @@
       setWeek(r.week);
       S.nextWeek = undefined;
       renderAll();
-      var added = (r.week.tasks || []).length - before;
-      toast(added > 0 ? plural(added, "more name") + " added below." : "Nothing new to add.", { kind: "ok" });
+      var added = rowsOf(r.week).length - before;
+      toast(added > 0 ? plural(added, "more company", "more companies") + " added below." : "Nothing new to add.", { kind: "ok" });
       var ex = extraBatches();
       var last = ex[ex.length - 1];
       var head = last ? document.getElementById("wk-g" + last.id) : null;
@@ -1144,7 +1319,7 @@
         var it = items.filter(function (x) { return x.cid === picked; })[0];
         if (!it) return;
         window.BDCall.open({
-          contact: it.contact, task: it.task, mode: "decide", recommendation: it.rec, missed: it.missed,
+          contact: it.contact, task: S.taskById[it.row.id] || { id: it.row.id }, mode: "decide", recommendation: it.rec, missed: it.missed,
           interaction: it.interaction, aiEnabled: S.ai, canSend: S.canSend,
           onChange: function () { afterTrayChange(it.cid); },
         });
@@ -1152,14 +1327,23 @@
     });
   }
 
-  function menuItems(t, where) {
+  /** The More menu. A row's (or Next up's): Not this week and Done, nothing to log for the whole
+   *  row, and the person to call first's own choices (named when the row has more than one person).
+   *  A person's, inside an opened row: their own choices only. */
+  function menuItems(r, where, p) {
     var items = [];
-    var maint = isMaint(t);     // a pinned follow-up cannot be taken off by hand (the server says 409)
-    if (!maint && (where === "row" || isPhone())) items.push({ act: "snooze", label: "Not this week", icon: "clock" });
-    items.push({ act: "log-meeting", label: "Log a meeting", icon: "users" });
-    items.push({ act: "nrp", label: "Not the right person", icon: "user-x" });
-    if (!maint) items.push({ act: "done", label: "Done, nothing to log", icon: "check" });
-    if (contactHref(t.contact)) items.push({ act: "open", label: "Open contact", icon: "arrow-right", href: contactHref(t.contact) });
+    var maint = isMaint(r);     // a pinned follow-up cannot be taken off by hand (the server says 409)
+    var who = where === "person" ? p : firstOf(r);
+    var named = where !== "person" && (r.people || []).length > 1 ? BD.firstName(who) : "";
+    if (where !== "person" && !maint && (where === "row" || isPhone())) items.push({ act: "snooze", label: "Not this week", icon: "clock" });
+    if (who) {
+      items.push({ act: "log-meeting", label: named ? "Log a meeting with " + named : "Log a meeting", icon: "users" });
+      if (!who.not_right_person) items.push({ act: "nrp", label: named ? named + " is not the right person" : "Not the right person", icon: "user-x" });
+    }
+    if (where !== "person" && !maint) items.push({ act: "done", label: "Done, nothing to log", icon: "check" });
+    if (who && contactHref(who)) {
+      items.push({ act: "open", label: named ? "Open " + named + "'s contact" : "Open contact", icon: "arrow-right", href: contactHref(who) });
+    }
     return items;
   }
 
@@ -1170,11 +1354,18 @@
     if (!target.closest) return;
     if (target.closest("[data-call-root]") || target.closest(".menu")) return;   // BDCall's own, and the menu's
     var btn = target.closest("[data-act]");
-    if (!btn || !main.contains(btn)) return;
+    if (!btn || !main.contains(btn)) {
+      // A click anywhere else on a row's head (its reason, its pills) opens or closes it too.
+      var head = target.closest(".wk-co-head");
+      var tg = head && !target.closest("a, button") ? head.querySelector('[data-act="toggle"]') : null;
+      if (tg) toggleRow(tg);
+      return;
+    }
     var act = btn.getAttribute("data-act");
-    var t = taskOf(btn);
+    var r = rowOf(btn);
 
-    if (act === "call") { if (t) openCall(t, "call"); return; }   // a real tel: link: no preventDefault
+    if (act === "toggle") return toggleRow(btn);
+    if (act === "call") { if (r) openCall(r, personOf(btn, r), "call"); return; }   // a real tel: link: no preventDefault
     if (act === "ten-more") return tenMore(btn);
     if (act === "run-weekly") return runWeekly(btn);
     if (act === "toggle-done") {
@@ -1201,24 +1392,31 @@
     if (act === "tray-confirm") return trayConfirm(btn);
     if (act === "tray-more") { S.trayAll = true; renderTray(); focusLater(".wk-tray-item:nth-child(4) .wk-tray-line"); return; }
     if (act === "tray-sheet") return openTraySheet();
-    if (!t || !S.canAct) return;
-    if (act === "more") { BD.menu(btn, menuItems(t, btn.closest("#wk-next") ? "next" : "row")); return; }
-    if (act === "snooze") return doSnooze(t, btn);
-    if (act === "reopen") return doReopen(t, btn);
+    if (!r || !S.canAct) return;
+    if (act === "more") {
+      var inPerson = btn.closest("[data-person]");
+      BD.menu(btn, menuItems(r, inPerson ? "person" : (btn.closest("#wk-next") ? "next" : "row"), personOf(btn, r)));
+      return;
+    }
+    if (act === "snooze") return doSnooze(r, btn);
+    if (act === "done") return doDone(r, btn);
+    if (act === "reopen") return doReopen(r, btn);
   });
 
-  // The menu's choices, from BD.menu (dispatched on its anchor, inside a row or Next up).
-  main.addEventListener("bd-menu", function (e) {
+  // The menu's choices, from BD.menu (dispatched on its anchor: a row, Next up, or a person in one).
+  // Heard on the document: when a background refresh redrew the anchor away while the menu was open,
+  // BD.menu sends the choice there, and the old anchor still names its row and person.
+  document.addEventListener("bd-menu", function (e) {
     var d = e.detail || {};
-    var t = taskOf(d.anchor);
-    if (!t || !S.canAct) return;
-    if (d.act === "snooze") doSnooze(t, null);
-    else if (d.act === "done") doDone(t, null);
-    else if (d.act === "log-meeting") openCall(t, "meeting");
-    else if (d.act === "nrp") openCall(t, "nrp");
+    var r = rowOf(d.anchor);
+    if (!r || !S.canAct) return;
+    if (d.act === "snooze") doSnooze(r, null);
+    else if (d.act === "done") doDone(r, null);
+    else if (d.act === "log-meeting") openCall(r, personOf(d.anchor, r), "meeting");
+    else if (d.act === "nrp") openCall(r, personOf(d.anchor, r), "nrp");
   });
 
-  // Hovering or focusing a person's row rings their dot in the tracker.
+  // Hovering or focusing a company's row rings its dot in the tracker.
   function hot(id) {
     Array.prototype.forEach.call(summaryEl.querySelectorAll(".dot.is-hot"), function (d) { d.classList.remove("is-hot"); });
     if (id == null) return;

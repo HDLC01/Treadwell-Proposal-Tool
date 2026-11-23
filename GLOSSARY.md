@@ -250,7 +250,7 @@ A company Treadwell already works for, kept in touch with a follow-up every 120 
 _Avoid_: maintenance contact (that is one person at it), customer
 
 **This Week**:
-A salesperson's BD home page: their Weekly 10, their Maintenance follow-ups that are due, any names from Give Me 10 More, and their pace for the year. A BD manager or admin chooses whose week to look at; an assistant's BD home is Contacts instead.
+A salesperson's BD home page: their Weekly 10, their Maintenance follow-ups that are due, any companies from Give Me 10 More, and their pace for the year. It shows one row per company, which opens to the people there that the salesperson owns, with the person to call first on top. A BD manager or admin chooses whose week to look at; an assistant's BD home is Contacts instead.
 _Avoid_: Home page, dashboard, the list
 
 **Contacts page**:
@@ -258,7 +258,7 @@ The BD CRM page that lists BD accounts on two tabs, BD and Maintenance, each com
 _Avoid_: Contact list, people list, address book
 
 **Weekly 10**:
-The ten people a salesperson is given to call in one Monday-to-Sunday week, five new and five follow-ups, best score first. "N of 10 done" counts these ten only, and the list never refills itself when one is done or taken off.
+The ten companies a salesperson is given to call in one Monday-to-Sunday week, five new and five follow-ups, best score first. A company takes at most one of the ten, led by its best-scoring person, and it is new only while nobody there has had a live talk. A row is done once a call, voicemail, meeting or hosted event is logged with anyone there. "N of 10 done" counts these ten companies only, and the list never refills itself when one is done or taken off.
 _Avoid_: The 10, weekly list, weekly-10, Troy's list
 
 **Friday batch**:
@@ -266,12 +266,16 @@ How a Weekly 10 is made: every Friday at 4 PM the BD CRM builds each salesperson
 _Avoid_: Weekly run (that is the job that makes it), weekly list
 
 **Give Me 10 More**:
-The This Week button that adds the next ten people by score to this week's list, after the Weekly 10. It never changes "N of 10 done", and it never adds anyone already on this week's list. A company made a Maintenance account can also leave a small list of the same kind on This Week holding only pinned maintenance follow-ups; that list is not a Give Me 10 More, and its follow-ups show under "Due now".
+The This Week button that adds up to ten more companies, the next by score, to this week's list, after the Weekly 10. It never changes "N of 10 done", and it never adds a company already on this week's lists in any state, or one where anyone was tried in the last 3 days. A company made a Maintenance account can also leave a small list of the same kind on This Week holding only pinned maintenance follow-ups; that list is not a Give Me 10 More, and its follow-ups show under "Due now".
 _Avoid_: Extra 10, ten more, refill
 
 **Maintenance follow-up**:
-A task on This Week for one person at a Maintenance account whose follow-up is due. It sits under "Due now", above the Weekly 10 and outside it, and stays until a call, meeting, email or text is logged for that person.
+A task on This Week for one person at a Maintenance account whose follow-up is due. The follow-ups of one company are one row under "Due now", above the Weekly 10 and outside it, and "Due now: N" counts companies. Each stays until a call, meeting, email or text is logged for that person, and the row stays while anyone on it is still due.
 _Avoid_: Pinned task, maintenance task
+
+**Miss**:
+A call to someone at a BD account that reached nobody: a voicemail, or a call nobody answered. Misses count for the whole BD account, whoever was called, by their Central date, and go back to 0 after a live talk with anyone there. A BD account's misses are the tries part of its score. On the page they read as tries ("Never reached after 2 tries", "2 tries since the last live talk"), the words the salesperson already uses; in code and in talk about the rules, say miss.
+_Avoid_: Missed call (that is the "Send follow-up" card on one contact), attempt, try (in the rules a try is any call or voicemail, answered or not: what the 3-day rest counts)
 
 **BD Admin page**:
 The BD CRM's own Admin page, where a BD admin sets each person's BD login and BD role and the BD settings, and an assistant or BD admin handles Unmatched calls and sees past Workbook imports. It is separate from the proposal tool's Admin page: neither changes what the other holds. Only a BD admin has it in the sidebar; an assistant reaches it from the Contacts page.
