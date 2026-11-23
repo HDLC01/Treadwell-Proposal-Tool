@@ -95,6 +95,9 @@
   --bd-z-callbar: 9990;
 
   --bd-gutter: 28px;
+  /* The side column beside a page's main one (This Week's tray, a contact's side cards): 320px up to a
+     laptop's width, growing with a wide window to 480px so the width is used, not just stretched. */
+  --bd-side: clamp(320px, 22vw, 480px);
 }
 @media (max-width: 767px) {
   .bd-app { --bd-hit: 48px; --bd-gutter: 16px; }
@@ -126,7 +129,10 @@
 
 /* == components == */
 /* ── layout ─────────────────────────────────────────────────────────────────────────────── */
-.bd-app .page { max-width: 1180px; margin: 0; padding: 22px var(--bd-gutter) 64px; }
+/* The whole width beside the tool's sidebar, like the tool's CRM board (portal.html's .wrap): no column
+   cap, so a wide monitor is not a column on the left with empty paper to its right. What reads as text
+   (notes, empty states, hints) keeps its own measure; dialogs and sheets keep their own sizes. */
+.bd-app .page { margin: 0; padding: 22px var(--bd-gutter) 64px; }
 .bd-app .page-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 18px; }
 .bd-app .page-head-row { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
 .bd-app .page-head-row .page-head { margin-bottom: 0; }
@@ -140,7 +146,7 @@
 .bd-app .section-head > :last-child:not(:first-child):not(.section-meta) { margin-left: auto; }
 .bd-app .section-title { margin: 0 0 12px; font-size: 18px; font-weight: 600; line-height: 1.3; color: var(--bd-ink); }
 .bd-app .section-meta { font-size: 14px; color: var(--bd-ink-2); }
-.bd-app .layout-2 { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 24px; align-items: start; }
+.bd-app .layout-2 { display: grid; grid-template-columns: minmax(0, 1fr) var(--bd-side); gap: 24px; align-items: start; }
 .bd-app .wrap-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .bd-app .scroll-row { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; max-width: 100%; overflow-x: auto;
   overscroll-behavior-x: contain; scrollbar-width: thin; -webkit-overflow-scrolling: touch; }
@@ -605,7 +611,7 @@
 }
 
 /* ── the two columns ────────────────────────────────────────────────────────────────────── */
-.bd-app .wk-layout { grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; margin-top: 14px; }
+.bd-app .wk-layout { grid-template-columns: minmax(0, 1fr) var(--bd-side); gap: 16px; margin-top: 14px; }
 .bd-app .wk-layout.wk-solo { grid-template-columns: minmax(0, 1fr); }
 @media (max-width: 1099px) { .bd-app .wk-layout, .bd-app .wk-layout.wk-solo { grid-template-columns: minmax(0, 1fr); } }
 .bd-app .wk-main { container: wk-main / inline-size; min-width: 0; }
@@ -1017,6 +1023,14 @@
 .bd-app .ct-more, .bd-app .ct-more-gap { flex: none; width: 36px; }
 .bd-app .ct-more[aria-expanded="true"] { color: var(--bd-ink); background: var(--bd-recessed); }
 
+/* A wide window (1440 and up): People, Owner and Last live talk take a share of the extra width as well,
+   so the account name has the most room but the columns spread across the row instead of bunching
+   at its right end. Below 1440 the columns are as they were. */
+@media (min-width: 1440px) {
+  .bd-app .ct-colhead, .bd-app .ct-acct-toggle {
+    grid-template-columns: 38px minmax(0, 2.4fr) minmax(96px, .6fr) minmax(200px, 1fr) minmax(112px, .7fr) 18px; }
+}
+
 .bd-app .ct-people { padding: 4px 14px 4px 66px; background: var(--bd-paper); border-top: 1px solid var(--bd-line); }
 .bd-app .ct-person { display: grid; grid-template-columns: minmax(0, 1.4fr) 116px minmax(0, 1.3fr) minmax(0, 1fr) 96px 40px; gap: 12px;
   align-items: center; padding: 9px 0; font-size: 13px; }
@@ -1394,6 +1408,9 @@
 @media (max-width: 1023px) { .bd-app .ad-lists { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 767px) {
   .bd-app .ad-navbar { position: static; margin: 0 0 14px; padding: 0; }
+  /* a card's title and its button ("Import a workbook") share a row while they fit; at 320 in a wide font
+     (Linux's DejaVu Sans) the button drops under the title instead of pushing the page sideways */
+  .bd-app .ad-sec > .card-head { flex-wrap: wrap; }
   /* the six sections wrap to rows instead of scrolling out of sight */
   .bd-app .ad-nav.tabs { flex-wrap: wrap; overflow: visible; }
   .bd-app .ad-sec { scroll-margin-top: 64px; }
