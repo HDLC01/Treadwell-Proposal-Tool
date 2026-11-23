@@ -647,6 +647,10 @@
 .bd-app .wk-next-label2 { font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--bd-ink-2); }
 .bd-app .wk-next-when { font-size: 13px; font-weight: 600; color: var(--bd-ink); }
 .bd-app .wk-next-sum { margin-top: 4px; font-size: 13px; color: var(--bd-ink-2); }
+.bd-app .wk-next-fact { margin-top: 2px; font-size: 13px; color: var(--bd-ink-2); overflow-wrap: anywhere; }
+/* the others at Next up's company (#828), under the card */
+.bd-app .wk-next-also { grid-column: 1 / -1; min-width: 0; padding-top: 12px; border-top: 1px solid var(--bd-line); }
+.bd-app .wk-next-also .wk-people { margin-top: 4px; }
 @container wk-main (min-width: 640px) {
   .bd-app .wk-next { grid-template-columns: minmax(0, 1fr) 230px; }
   .bd-app .wk-next-side { display: flex; }
@@ -661,18 +665,53 @@
 .bd-app .wk-end .wk-ten, .bd-app .wk-end .wrap-row { margin-top: 8px; }
 
 /* ── rows: Rest of your 10, an extra 10, next week's preview ────────────────────────────── */
-.bd-app .wk-list .wk-row {
-  display: grid; grid-template-columns: 40px minmax(0, 1fr) auto;
-  grid-template-areas: "av who call" "av pill call" "av reason call";
+/* One company a row (#828): its head is the old row's grid, with the company's toggle (the building,
+   the name, the person to call first and the company's misses) where the avatar and name were; the
+   people sit under it, hidden until it is opened (the Contacts page's company rows, #810). */
+.bd-app .wk-list .wk-row.wk-co { display: block; min-height: 0; padding: 0; }
+.bd-app .wk-co-head {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "who call" "pill call" "reason call";
   align-items: start; gap: 4px 12px; min-height: 64px; padding: 12px 16px;
 }
-.bd-app .wk-row > .avatar { grid-area: av; }
-.bd-app .wk-who { grid-area: who; min-width: 0; color: var(--bd-ink); text-decoration: none; }
-/* a name opens the contact page (#808) */
-.bd-app .wk-who:hover { color: var(--bd-ink); }
-.bd-app .wk-who:hover .who-name { text-decoration: underline; text-underline-offset: 3px; }
-.bd-app .wk-who .who-name { font-size: 14px; }
-.bd-app .wk-who .who-sub { font-size: 13px; }
+.bd-app .wk-co-toggle { grid-area: who; display: flex; align-items: flex-start; gap: 12px; min-width: 0; min-height: var(--bd-hit);
+  padding: 0; border: 0; background: none; color: var(--bd-ink); font: inherit; text-align: left; cursor: pointer; }
+.bd-app .wk-co-toggle.is-static { cursor: default; }
+.bd-app .wk-co-toggle:focus-visible { outline-offset: 2px; }
+.bd-app .wk-co-ico { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 40px; height: 40px;
+  border-radius: 9px; color: var(--bd-ink-2); background: var(--bd-recessed); border: 1px solid var(--bd-line); }
+.bd-app .wk-co.is-open .wk-co-ico { color: var(--bd-link); background: var(--bd-nav-active); border-color: transparent; }
+.bd-app .wk-co-main { display: flex; flex: 1 1 auto; flex-direction: column; gap: 1px; min-width: 0; }
+.bd-app .wk-co-name { font-size: 14px; font-weight: 700; line-height: 1.35; overflow-wrap: anywhere; }
+.bd-app .wk-co-first { font-size: 13px; line-height: 1.4; color: var(--bd-ink-2); overflow-wrap: anywhere; }
+.bd-app .wk-co-misses { font-size: 12.5px; font-weight: 600; line-height: 1.4; color: var(--bd-warn); }
+.bd-app .wk-co-chev { display: inline-flex; flex: none; align-self: center; color: var(--bd-ink-2); transition: transform .15s var(--bd-ease); }
+.bd-app .wk-co.is-open .wk-co-chev { color: var(--bd-link); transform: rotate(90deg); }
+.bd-app .wk-co-body { padding: 4px 16px 12px 68px; background: var(--bd-paper); border-top: 1px solid var(--bd-line); }
+.bd-app .wk-co-foot { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 10px; }
+.bd-app .wk-co-note { padding-top: 10px; font-size: 13px; color: var(--bd-ink-2); }
+/* a person on a row (opened, or under Next up) */
+.bd-app .wk-person { display: grid; grid-template-columns: 32px minmax(0, 1fr) minmax(0, 1.2fr) auto;
+  grid-template-areas: "av who facts acts"; align-items: center; gap: 4px 12px; padding: 10px 0; }
+.bd-app .wk-person + .wk-person { border-top: 1px dashed var(--bd-line); }
+.bd-app .wk-person > .avatar { grid-area: av; }
+.bd-app .wk-p-who { grid-area: who; display: flex; flex-direction: column; min-width: 0; }
+.bd-app .wk-p-name { font-size: 14px; font-weight: 600; color: var(--bd-ink); overflow-wrap: anywhere; }
+.bd-app a.wk-p-name { text-decoration: none; }
+.bd-app a.wk-p-name:hover { color: var(--bd-ink); text-decoration: underline; text-underline-offset: 3px; }
+.bd-app .wk-p-sub { font-size: 13px; color: var(--bd-ink-2); overflow-wrap: anywhere; }
+.bd-app .wk-p-facts { grid-area: facts; display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 13px;
+  line-height: 1.4; color: var(--bd-ink-2); overflow-wrap: anywhere; }
+.bd-app .wk-p-flag { display: block; margin-top: 2px; }
+.bd-app .wk-p-acts { grid-area: acts; display: flex; align-items: center; gap: 4px; }
+@media (max-width: 767px) {
+  .bd-app .wk-co-body { padding: 4px 12px 12px; }
+  .bd-app .wk-person { grid-template-columns: 32px minmax(0, 1fr) auto; grid-template-areas: "av who acts" "av facts facts";
+    align-items: start; }
+  .bd-app .wk-co-toggle { gap: 10px; }
+  .bd-app .wk-co-ico { width: 32px; height: 32px; }
+  .bd-app .wk-co-foot .btn { flex: 1 1 auto; }
+}
 .bd-app .wk-reason { grid-area: reason; min-width: 0; font-size: 13px; font-weight: 400; color: var(--bd-ink-2); line-height: 20px; text-wrap: pretty; }
 .bd-app .wk-pill { grid-area: pill; min-width: 0; }
 .bd-app .wk-pill:empty, .bd-app .wk-reason:empty { display: none; }
@@ -688,8 +727,8 @@
 .bd-app .wk-next-score { margin-top: 10px; }
 .bd-app .wk-nophone { font-size: 13px; color: var(--bd-ink-2); }
 @media (min-width: 768px) {
-  .bd-app .wk-list .wk-row { grid-template-columns: 40px minmax(0, 1fr) auto auto;
-    grid-template-areas: "av who call more" "av pill call more" "av reason call more"; }
+  .bd-app .wk-co-head { grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-areas: "who call more" "pill call more" "reason call more"; }
 }
 /* A row with no phone number on a phone: its More button takes the call column ("No phone" has no
    button to sit beside), so the row can still be taken off, marked done or flagged. */
@@ -697,45 +736,61 @@
   .bd-app .wk-row-nophone .wk-row-call { display: none; }
   .bd-app .wk-row-nophone .wk-row-more { grid-area: call; }
 }
-/* A middle column (520-719: beside the tray, or a tablet): name and company on the left, the pill
-   over the reason on the right, two lines a row instead of four. */
+/* A middle column (520-719: beside the tray, or a tablet): the company on the left, the pill over
+   the reason on the right, two lines a row instead of four. */
 @container wk-main (min-width: 520px) and (max-width: 719.98px) {
-  .bd-app .wk-list .wk-row {
-    grid-template-columns: 40px minmax(0, 1fr) minmax(0, 1fr) 44px 44px;
-    grid-template-areas: "av who pill call more" "av who reason call more";
+  .bd-app .wk-co-head {
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) 44px 44px;
+    grid-template-areas: "who pill call more" "who reason call more";
     align-items: center; gap: 2px 12px; padding: 10px 16px;
   }
-  .bd-app .wk-list .wk-row.is-readonly { grid-template-columns: 40px minmax(0, 1fr) minmax(0, 1fr) minmax(104px, auto);
-    grid-template-areas: "av who pill call" "av who reason call"; }
+  .bd-app .wk-co.is-readonly > .wk-co-head { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(104px, auto);
+    grid-template-areas: "who pill call" "who reason call"; }
   .bd-app .wk-pill { align-self: end; }
   .bd-app .wk-reason { align-self: start; }
   .bd-app .wk-pill .pill { margin: 0; }
   .bd-app .wk-pill:empty + .wk-reason { grid-row: 1 / span 2; align-self: center; }
   /* Two pills ("Maintenance . due" and a status pill) side by side need a wider right half. */
-  .bd-app .wk-list .wk-row.wk-row-two { grid-template-columns: 40px minmax(0, 0.8fr) minmax(0, 1.2fr) 44px 44px; }
-  .bd-app .wk-list .wk-row.wk-row-two.is-readonly { grid-template-columns: 40px minmax(0, 0.8fr) minmax(0, 1.2fr) minmax(104px, auto); }
+  .bd-app .wk-row-two > .wk-co-head { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 44px 44px; }
+  .bd-app .wk-row-two.is-readonly > .wk-co-head { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(104px, auto); }
   /* When the two pills do not fit side by side the second one drops under the first, whole. */
   .bd-app .wk-row-two .wk-pill { display: flex; flex-wrap: wrap; gap: 4px; }
   .bd-app .wk-row-two .wk-pill .pill + .pill { margin-left: 0; }
 }
 @container wk-main (min-width: 720px) {
-  .bd-app .wk-list .wk-row {
-    grid-template-columns: 40px minmax(0, 1.15fr) minmax(0, 1fr) 140px 44px 44px;
-    grid-template-areas: "av who reason pill call more";
+  .bd-app .wk-co-head {
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) 140px 44px 44px;
+    grid-template-areas: "who reason pill call more";
     align-items: center; gap: 0 12px; min-height: 64px; padding: 10px 16px;
   }
-  .bd-app .wk-list .wk-row.is-readonly { grid-template-columns: 40px minmax(0, 1.15fr) minmax(0, 1fr) 140px minmax(104px, auto);
-    grid-template-areas: "av who reason pill call"; }
+  .bd-app .wk-co.is-readonly > .wk-co-head { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) 140px minmax(104px, auto);
+    grid-template-areas: "who reason pill call"; }
   .bd-app .wk-reason { line-height: 1.4; }
   .bd-app .wk-pill .pill { margin: 0; }
+  .bd-app .wk-co-toggle { align-items: center; }
+}
+/* A wide main column (1000 and up: a big screen once the page fills it, #837): the company and the
+   Next up card keep a readable width and the room left goes to the reason and LAST LIVE TALK, so
+   nothing floats in the middle at 1920 or 2560. */
+@container wk-main (min-width: 1000px) {
+  .bd-app .wk-next { grid-template-columns: minmax(0, 620px) minmax(230px, 1fr); }
+  .bd-app .wk-co-head { grid-template-columns: minmax(0, 460px) minmax(0, 1fr) 180px 44px 44px; }
+  .bd-app .wk-co.is-readonly > .wk-co-head { grid-template-columns: minmax(0, 460px) minmax(0, 1fr) 180px minmax(104px, auto); }
+  .bd-app .wk-person { grid-template-columns: 32px minmax(0, 380px) minmax(0, 1fr) auto; }
 }
 
 /* done and taken off */
 .bd-app .wk-list .wk-row.wk-done-row {
-  grid-template-columns: 40px minmax(0, 1fr) auto; grid-template-areas: "av who undo" "av outcome undo";
-  align-items: center; gap: 2px 12px; min-height: 56px;
+  display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; grid-template-areas: "av who undo" "av outcome undo";
+  align-items: center; gap: 2px 12px; min-height: 56px; padding: 12px 16px;
 }
-.bd-app .wk-done-row > .avatar { opacity: .55; }
+.bd-app .wk-done-row > .avatar { grid-area: av; opacity: .55; }
+/* a done row's company, and its people (each a link to their contact page) */
+.bd-app .wk-who { grid-area: who; min-width: 0; color: var(--bd-ink); }
+.bd-app .wk-who .who-name { font-size: 14px; overflow-wrap: anywhere; }
+.bd-app .wk-who .who-sub { font-size: 13px; overflow-wrap: anywhere; }
+.bd-app .wk-who .who-sub a { color: var(--bd-ink-2); text-decoration: none; }
+.bd-app .wk-who .who-sub a:hover { color: var(--bd-ink); text-decoration: underline; text-underline-offset: 3px; }
 .bd-app .wk-outcome { grid-area: outcome; font-size: 13px; color: var(--bd-ink-2); }
 .bd-app .wk-undo { grid-area: undo; }
 @container wk-main (min-width: 520px) {
@@ -823,6 +878,7 @@
   .bd-app .wk-dots .dots-row { gap: 4px; }
   .bd-app .wk-layout { margin-top: 14px; gap: 16px; }
   .bd-app .wk-next { padding: 14px; gap: 0; }
+  .bd-app .wk-next-also { margin-top: 14px; }
   .bd-app .wk-next-kind-top { display: inline-flex; }
   .bd-app .wk-next-kind { display: none; }
   .bd-app .wk-meta-wide { display: none; }

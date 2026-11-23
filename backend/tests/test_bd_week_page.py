@@ -184,7 +184,7 @@ def empty_week():
     """A WeekView with no batch (docs/bd/api-contract.md), as GET /api/bd/week answers before Friday."""
     return {"status": 200, "body": {"ok": True, "week": {
         "week_start": "2026-11-02", "week_end": "2026-11-08", "owner": {"id": 1, "name": "Avery Quill"},
-        "batch": None, "batches": [], "tasks": [], "done_count": 0, "total": 0, "due_count": 0,
+        "batch": None, "batches": [], "tasks": [], "rows": [], "done_count": 0, "total": 0, "due_count": 0,
         "pace": {"year": 2026, "as_of": "2026-11-04", "required_to_date": 0.0, "completed": 0, "target_total": 0,
                  "pct": 0, "delta": 0, "label": "2026 BD Pace: 0%"},
         "weekly_meetings": {"count": 0, "goal": 5, "non_dsbc_website": 0, "min": 1}, "touches_this_week": 0}}}
@@ -262,8 +262,31 @@ def week_with_dana():
                    "contact": {"id": 21, "name": "Dana Whitlow", "title": "Project Manager", "phone": "913-555-0101",
                                "phone_e164": "+19135550101", "company": {"id": 10, "name": "Prairie Ridge Builders LLC"},
                                "category": "bd", "importance": 3, "confirmed": True}}]
+    w["rows"] = [row_of(w["tasks"][0], "ten")]
     w["total"] = 1
     return out
+
+
+def person_of(task, **over):
+    """A WeekRow person (docs/bd/api-contract.md) for a task's contact."""
+    c = task["contact"]
+    p = {"id": c["id"], "name": c["name"], "title": c.get("title"), "phone": c.get("phone"),
+         "phone_e164": c.get("phone_e164"), "email": None, "confirmed": c.get("confirmed", True),
+         "last_live_at": None, "attempts_since_live": 0, "promised_date": None, "next_step": None,
+         "next_step_date": None, "task_id": task["id"], "not_right_person": False}
+    p.update(over)
+    return p
+
+
+def row_of(task, section, people=None, **over):
+    """The WeekRow of one task (its company, its person first), as GET /api/bd/week answers (#828)."""
+    r = {"id": task["id"], "section": section, "batch_id": task["batch_id"], "task_ids": [task["id"]],
+         "kind": task["kind"], "status": task["status"], "done_at": task["done_at"],
+         "snoozed_until": task["snoozed_until"], "reason": task["reason"], "reasons": task["reasons"],
+         "score": task["score"], "company": task["contact"]["company"], "misses": 0, "last_live_at": None,
+         "people": people or [person_of(task)]}
+    r.update(over)
+    return r
 
 
 def test_a_task_names_its_contact_with_a_link_to_the_contact_page(tmp_path):
@@ -302,6 +325,9 @@ def week_with_a_pin_only_list(bd_call=False):
                            "contact": {"id": 32, "name": "Wes Calder", "title": "", "phone": "913-555-0112",
                                        "phone_e164": "+19135550112", "company": {"id": 18, "name": "Osage Plains Brewing"},
                                        "category": "bd", "importance": 1, "confirmed": False}})
+    by_id = {t["id"]: t for t in w["tasks"]}
+    w["rows"] = [row_of(by_id[320], "due"), row_of(by_id[302], "ten")] + (
+        [row_of(by_id[321], "more")] if bd_call else [])
     return out
 
 
@@ -323,3 +349,151 @@ def test_an_extra_list_with_a_bd_call_is_still_numbered_from_one(tmp_path):
     text = out["els"]["lists"]["text"]
     assert "1 more (to get ahead)" in text and "(to get ahead) (" not in text, text[:800]
     assert 'data-batch="211"' in out["els"]["lists"]["html"] and 'data-batch="210"' not in out["els"]["lists"]["html"]
+
+
+# ── one row per company (#828) ────────────────────────────────────────────────────────────────────
+def task(tid, kind, status, cid, name, company, title=None, phone=None, score=50, reasons=None, done_at=None,
+         category="bd", importance=1):
+    return {"id": tid, "batch_id": 201, "kind": kind, "status": status, "score": score,
+            "reason": ". ".join(reasons or []) + ".", "reasons": reasons or [], "done_at": done_at,
+            "snoozed_until": None,
+            "contact": {"id": cid, "name": name, "title": title, "phone": phone,
+                        "phone_e164": ("+1" + phone.replace("-", "")) if phone else None, "company": company,
+                        "category": category, "importance": importance, "confirmed": True}}
+
+
+KAW = {"id": 17, "name": "Kaw Valley Cold Storage"}
+PRAIRIE = {"id": 10, "name": "Prairie Ridge Builders LLC"}
+CEDAR = {"id": 14, "name": "Cedar Creek Concrete"}
+JUNIPER = {"id": 19, "name": "Juniper Hollow Dental & Orthodontics Professional Building Partners"}
+
+
+def company_week():
+    """Avery's week, worked by hand. Due now: Kaw Valley (Hal 301 and Nora 331, both due: ONE row). The
+    10 (batch 201), three companies: Prairie Ridge (a week built before #828 with two tasks there, Dana
+    302 and Sue 340: ONE row, Dana first; 2 misses since a live talk on Jun 1), Juniper Hollow (Ivy 304,
+    never reached after 2 tries, no phone) and Cedar Creek (Priya 303, done). So "1 of 3 done", "Due
+    now: 1 maintenance account", "2 calls to go", and four task nodes, not six."""
+    out = empty_week()
+    w = out["body"]["week"]
+    w["batch"] = {"id": 201, "kind": "friday", "owner": {"id": 1, "name": "Avery Quill"}, "week_start": "2026-11-02",
+                  "generated_at": "2026-10-30T16:00:00-05:00"}
+    w["batches"] = [w["batch"]]
+    hal = task(301, "maintenance", "open", 30, "Hal Brecken", KAW, "Plant Manager", "785-555-0110",
+               reasons=["Follow-up was due Fri, Oct 30"], category="maintenance")
+    nora = task(331, "maintenance", "open", 31, "Nora Lindqvist", KAW, "Maintenance Lead", "785-555-0111",
+                reasons=["No follow-up logged yet"], category="maintenance")
+    dana = task(302, "followup", "open", 21, "Dana Whitlow", PRAIRIE, "Project Manager", "913-555-0101", score=82,
+                reasons=["Key account", "Quote out 3 weeks"], importance=3)
+    sue = task(340, "followup", "open", 34, "Sue Marlow", PRAIRIE, "Estimator", "913-555-0107", score=61,
+               reasons=["Last live talk 5 months ago"])
+    ivy = task(304, "new", "open", 36, "Ivy Torres", JUNIPER, "Office Manager", None, score=44,
+               reasons=["Never reached after 2 tries"])
+    priya = task(303, "new", "done", 25, "Priya Nandan", CEDAR, "Superintendent", "913-555-0105", score=40,
+                 reasons=["Never contacted"], done_at="2026-11-03T10:15:00-06:00")
+    w["tasks"] = [hal, nora, dana, sue, ivy, priya]
+    w["rows"] = [
+        row_of(hal, "due", [person_of(hal), person_of(nora)], task_ids=[301, 331]),
+        row_of(dana, "ten", [
+            person_of(dana, attempts_since_live=1, promised_date="2026-11-06"),
+            person_of(sue, last_live_at="2026-06-01T10:00:00-05:00", attempts_since_live=1,
+                      next_step="Send the floor samples", next_step_date="2026-11-20"),
+        ], task_ids=[302, 340], misses=2, last_live_at="2026-06-01T10:00:00-05:00"),
+        row_of(ivy, "ten", [person_of(ivy, attempts_since_live=2)], misses=2),
+        row_of(priya, "ten"),
+    ]
+    w["done_count"], w["total"], w["due_count"] = 1, 3, 1
+    return out
+
+
+def company_run(tmp_path, who=None, name="co", search=""):
+    require_node()
+    users = {"status": 200, "body": {"ok": True, "total": 1, "items": [
+        {"id": 1, "name": "Avery Quill", "role": "salesperson"}]}}
+    sc = {"scripts": ["js/crm-core.js"] + page_scripts(), "token": "tok", "ready": True,
+          "bdMe": who or me("Avery Quill", "salesperson"), "now": MORNING, "ids": IDS, "search": search,
+          "responses": {"GET /api/bd/week": company_week(), "GET /api/bd/settings": settings(),
+                        "GET /api/bd/users": users}}
+    f = tmp_path / ("%s.json" % name)
+    f.write_text(json.dumps(sc), encoding="utf-8")
+    proc = run_node(HARNESS, FRONTEND, f)
+    assert proc.returncode == 0, proc.stderr[-3000:]
+    out = last_json_line(proc.stdout)
+    assert out["threw"] is None, out["threw"]
+    return out
+
+
+def node_html(html, task_id):
+    """The markup from the node that carries data-task="<task_id>" up to the next such node."""
+    at = html.index('data-task="%d"' % task_id)
+    nxt = re.search(r'data-task="\d+"', html[at + 10:])
+    return html[at:at + 10 + nxt.start()] if nxt else html[at:]
+
+
+def words(html):
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html)).replace(" ,", ",").strip()
+
+
+def test_a_company_is_one_row_and_the_10_counts_companies(tmp_path):
+    out = company_run(tmp_path)
+    html = out["els"]["lists"]["html"]
+    assert re.findall(r'data-task="(\d+)"', html) == ["301", "302", "304", "303"], \
+        "one node per company row (its first task), never one per task"
+    summary = words(out["els"]["summary"]["html"])
+    assert "1 of 3 done" in summary and "Due now: 1 maintenance account" in summary, summary
+    assert re.findall(r'data-dot-task="(\d+)"', out["els"]["summary"]["html"]) == ["303", "304", "302"], "New (done first), then Follow-ups"
+    assert out["els"]["week-sub"]["text"] == "2 calls to go this week."
+
+
+def test_a_closed_row_shows_the_company_the_person_to_call_first_the_reason_and_the_misses(tmp_path):
+    html = company_run(tmp_path)["els"]["lists"]["html"]
+    row = node_html(html, 302)
+    toggle = re.search(r'<button[^>]*data-act="toggle"[^>]*>', row).group(0)
+    assert 'aria-expanded="false"' in toggle and 'aria-controls="wk-p-302"' in toggle
+    head = words(row[:row.index('id="wk-p-302"')])
+    for want in ("Prairie Ridge Builders LLC", "Dana Whitlow", "Quote out 3 weeks", "2 tries since the last live talk",
+                 "Key account"):
+        assert want in head, (want, head)
+    assert "Sue Marlow" not in head, "only the person to call first shows on a closed row"
+    assert re.search(r'<div[^>]*id="wk-p-302"[^>]*\shidden', row), "closed: the people are there, hidden"
+    # Juniper Hollow: nobody there has had a live talk.
+    assert "Never reached after 2 tries" in words(node_html(html, 304))
+
+
+def test_opening_a_row_shows_each_person_with_how_to_reach_them_and_where_things_stand(tmp_path):
+    row = node_html(company_run(tmp_path)["els"]["lists"]["html"], 302)
+    panel = row[row.index('id="wk-p-302"'):]
+    assert re.findall(r'data-person="(\d+)"', panel) == ["21", "34"], "the person to call first on top"
+    dana = words(panel[panel.index('data-person="21"'):panel.index('data-person="34"')])
+    sue = words(panel[panel.index('data-person="34"'):])
+    assert "Project Manager" in dana and "913-555-0101" in dana, dana
+    assert "No live talk yet" in dana and "1 try" in dana and "Promised a call by Fri, Nov 6" in dana, dana
+    assert "Estimator" in sue and "913-555-0107" in sue, sue
+    assert "Last live talk Mon, Jun 1" in sue and "1 try since" in sue, sue
+    assert "Next step: Send the floor samples, Fri, Nov 20" in sue, sue
+    calls = re.findall(r'<a[^>]*href="(tel:[^"]+)"[^>]*data-act="call"', panel)
+    assert calls == ["tel:+19135550101", "tel:+19135550107"], calls
+    assert "/bd/contact.html?id=34&amp;from=week" in panel, "each name opens the contact page"
+
+
+def test_due_now_is_one_row_per_company_and_next_up_lists_the_others_there(tmp_path):
+    html = company_run(tmp_path)["els"]["lists"]["html"]
+    nxt = node_html(html, 301)
+    assert "Hal Brecken" in words(nxt) and "Also at Kaw Valley Cold Storage" in words(nxt), words(nxt)
+    assert 'data-person="31"' in nxt and "Nora Lindqvist" in words(nxt)
+    assert 'data-task="331"' not in html
+
+
+def test_the_manager_sees_the_company_score_and_nothing_to_press(tmp_path):
+    out = company_run(tmp_path, me("Devon Hale", "manager", uid=4), name="mgr", search="?owner=1")
+    html = out["els"]["lists"]["html"]
+    assert "Priority 82" in words(node_html(html, 302))
+    for act in ("call", "more", "snooze", "done", "reopen", "ten-more"):
+        assert 'data-act="%s"' % act not in html, act
+    assert 'data-act="toggle"' in html, "a manager can still open a row to read it"
+    assert "913-555-0107" in words(node_html(html, 302)), "the phone number as text"
+
+
+def test_a_long_company_name_goes_in_as_text(tmp_path):
+    html = company_run(tmp_path)["els"]["lists"]["html"]
+    assert "Juniper Hollow Dental &amp; Orthodontics" in html and "Dental & Orthodontics" not in html

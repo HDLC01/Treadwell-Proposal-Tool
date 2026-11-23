@@ -13,7 +13,7 @@ are worked by hand from the seed, never read back from the page's own rules:
     303 Priya Nandan, Cedar Creek Concrete    new, done Nov 3     -> Done; her newest call since
                                                                      Monday is 104, no answer, Nov 3
   So: "1 of 2 done" (the maintenance task is not one of the 10), "Due now: 1 maintenance
-  follow-up", "1 call to go this week.", meetings "0 of 5" (settings' weekly goal).
+  account" (one company, #828), "1 call to go this week.", meetings "0 of 5" (settings' weekly goal).
   Pace: 4 of 29 touches this year, 24.5 due by today -> 14%, 20 behind (half up), 8 weeks left ->
   "About 3 extra calls a week" (20 / 8 rounded up).
   Give Me 10 More adds Lena Ortiz and Marisa Cole (Avery's, not on the week) as "2 more (to get
@@ -57,6 +57,9 @@ HAL_C, DANA_C, PRIYA_C = 30, 21, 25
 NORA_C = 31                               # Avery's other maintenance contact (Give Me 10 More's)
 
 MAINT_PILL = "Maintenance · due"
+DUE_ONE = "Due now: 1 maintenance account"           # "Due now: N" counts companies (#828)
+NEXT_CALL = '#wk-next .wk-next-acts [data-act="call"]'
+NEXT_MORE = '#wk-next .wk-next-acts [data-act="more"]'
 STAYS_LINE = "Stays on your list until you log a call, meeting, email or text."
 STAYS_409 = "A maintenance follow-up stays on the list until you log a call, meeting, email or text."
 
@@ -182,6 +185,13 @@ def dot_rows(pg):
         " : d.classList.contains('is-off') ? 'o' : 't').join(''))")
 
 
+def nora_elsewhere(env):
+    """Nora Lindqvist moved to Osage Plains Brewing (company 18, where Avery owns nobody else): a
+    maintenance company of her own, so her pin is a "Due now" row and not part of Hal's Kaw Valley
+    row (#828)."""
+    run_sql(env[1], "update contacts set company_id = 18 where id = %s", (NORA_C,))
+
+
 def history(pg, cid):
     """The contact's logged interactions, newest first, from the interactions route."""
     items = api(pg, "/api/bd/contacts/%d/interactions" % cid)["items"]
@@ -196,7 +206,7 @@ def test_the_week_reads_like_the_fixture_seed(page_as, expect):
     assert pg.locator("#wk-eyebrow .hide-phone").text_content() == "This Week · Mon, Nov 2 - Sun, Nov 8"
     assert pg.inner_text("#week-sub") == "1 call to go this week."
     s = summary(pg)
-    for words in ("1 of 2 done", "Due now: 1 maintenance follow-up", "Meetings this week: 0 of 5", "14%",
+    for words in ("1 of 2 done", DUE_ONE, "Meetings this week: 0 of 5", "14%",
                   "of the way to 29", "20 behind. About 3 extra calls a week catches up.",
                   "4 of 29 this year · 8 weeks left"):
         assert words in s, (words, s)
@@ -229,9 +239,9 @@ def test_names_open_the_contact_page_and_so_does_the_menu(page_as, expect):
     wait_week(pg)
     links = pg.locator("#main a[href]").evaluate_all("els => els.map(e => e.getAttribute('href'))")
     pages = sorted({h for h in links if not h.startswith("tel:")})
-    assert pages == ["/bd/contact.html?id=%d&from=week" % c for c in sorted((DANA_C, PRIYA_C, HAL_C))], pages
+    assert pages == ["/bd/contact.html?id=%d&from=week" % c for c in sorted((DANA_C, PRIYA_C, HAL_C, NORA_C))], pages
     expect(pg.locator("#wk-next .wk-next-open")).to_have_text("Open Hal Brecken")
-    pg.locator('#wk-rest [data-task="%d"] [data-act="more"]' % DANA).click()
+    pg.locator('#wk-rest [data-task="%d"] .wk-co-head [data-act="more"]' % DANA).click()
     acts = menu_acts(pg)
     assert acts == ["snooze", "log-meeting", "nrp", "done", "open"], acts
     assert pg.locator(".menu a").get_attribute("href") == "/bd/contact.html?id=%d&from=week" % DANA_C
@@ -353,7 +363,7 @@ def test_not_now_before_a_tap_saves_nothing(page_as, expect):
 def test_the_sheet_keeps_focus_inside_and_gives_it_back(page_as, expect):
     _, pg = page_as("/bd/", AVERY)
     wait_week(pg)
-    link = pg.locator('#wk-next [data-act="call"]')
+    link = pg.locator(NEXT_CALL)
     link.focus()
     call(pg.locator("#wk-next"))
     expect(sheet(pg)).to_be_visible()
@@ -362,7 +372,7 @@ def test_the_sheet_keeps_focus_inside_and_gives_it_back(page_as, expect):
         assert pg.evaluate("() => !!document.activeElement.closest('#call-sheet')"), "focus left the sheet"
     pg.keyboard.press("Escape")
     expect(sheet(pg)).to_be_hidden()
-    assert pg.evaluate("() => document.activeElement === document.querySelector('#wk-next [data-act=\"call\"]')")
+    assert pg.evaluate("() => document.activeElement === document.querySelector('#wk-next .wk-next-acts [data-act=\"call\"]')")
 
 
 @pytest.mark.parametrize("viewport", [DESKTOP, PHONE], ids=["1280", "390"])
@@ -385,7 +395,7 @@ def test_with_reduced_motion_the_call_sheet_takes_focus(page_as, expect, viewpor
     _, pg = page_as("/bd/", AVERY, viewport)
     wait_week(pg)
     pg.emulate_media(reduced_motion="reduce")
-    pg.locator('#wk-next [data-act="call"]').focus()
+    pg.locator(NEXT_CALL).focus()
     pg.keyboard.press("Enter")
     expect(sheet(pg)).to_be_visible()
     assert pg.evaluate("() => !!document.activeElement.closest('#call-sheet')"), "focus is on <body>"
@@ -394,7 +404,7 @@ def test_with_reduced_motion_the_call_sheet_takes_focus(page_as, expect, viewpor
 def test_a_menu_item_shows_a_real_focus_ring(page_as):
     _, pg = page_as("/bd/", AVERY)
     wait_week(pg)
-    pg.locator('#wk-next [data-act="more"]').click()
+    pg.locator(NEXT_MORE).click()
     pg.locator(".menu").wait_for()
     pg.keyboard.press("ArrowDown")
     style = pg.evaluate("() => { const e = document.activeElement; const c = getComputedStyle(e);"
@@ -476,17 +486,22 @@ def test_give_me_ten_more_adds_the_rest_and_never_moves_the_10(page_as, expect):
     _, pg = page_as("/bd/", AVERY)
     wait_week(pg)
     pg.locator("#ten-more-btn").click()
-    expect(toasts(pg)).to_contain_text("3 more names added below.")
+    # Two companies (Lena's Bluestem Logistics, Marisa's Cottonwood & Sons Paving); Nora's pin joins
+    # Hal's Kaw Valley row (#828).
+    expect(toasts(pg)).to_contain_text("2 more companies added below.")
     extra = pg.locator(".wk-extra")
     expect(extra).to_have_count(1)
     expect(extra.locator(".section-title")).to_have_text("2 more (to get ahead)")
-    names = sorted(t.strip() for t in extra.locator(".who-name").all_inner_texts())
-    assert names == ["Lena Ortiz", "Marisa Cole"], names
-    # Nora Lindqvist, a second due maintenance follow-up, sits under "Due now", not in the extra 10.
-    # She is at Kaw Valley with Hal, and "Due now" counts companies (#828): still 1.
-    expect(pg.locator("#wk-due")).to_contain_text("Nora Lindqvist")
+    names = sorted(t.strip() for t in extra.locator(".wk-co-name").all_inner_texts())
+    assert names == ["Bluestem Logistics", "Cottonwood & Sons Paving"], names
+    firsts = sorted(t.strip() for t in extra.locator(".wk-co-first").all_inner_texts())
+    assert firsts == ["Lena Ortiz · Facilities Director", "Marisa Cole · Owner"], firsts
+    # Nora Lindqvist, a second due maintenance follow-up, is at Kaw Valley with Hal: one company, one
+    # row (Next up), so no "Due now" group, and "Due now" counts it once.
+    expect(pg.locator('#wk-next [data-task="%d"] [data-person="%d"]' % (HAL, NORA_C))).to_have_count(1)
+    assert pg.locator("#wk-due").count() == 0
     s = summary(pg)
-    assert "1 of 2 done" in s and "Due now: 1 maintenance follow-up" in s, s
+    assert "1 of 2 done" in s and DUE_ONE in s, s
     pg.locator("#ten-more-btn").click()
     expect(pg.locator(".wk-ten-msg")).to_have_text("Everyone on your list is already covered this week.")
 
@@ -538,7 +553,7 @@ def test_the_admin_runs_the_weekly_batch_from_this_week(env, page_as, expect):
     expect(toasts(pg)).to_contain_text("This week's list is ready.")
     wait_week(pg)
     pg.wait_for_selector("[data-task]")
-    shown = {t.strip() for t in pg.locator("[data-task] .who-name").all_inner_texts()}
+    shown = {t.strip() for t in pg.locator("[data-task] [data-person] .wk-p-name").evaluate_all("els => els.map(e => e.textContent)")}
     if pg.locator("#wk-next-name").count():
         shown.add(pg.inner_text("#wk-next-name").strip())
     blairs = {"Rory Sandell", "Theo Banks", "Owen Pratt", "Sam Achebe", "D. Whitlow"}
@@ -641,7 +656,7 @@ def test_the_tracker_counts_only_the_10(page_as, expect):
     assert sorted(dots) == [str(DANA), str(PRIYA)], "a pinned task has no dot"
     assert pg.locator(".wk-dots").get_attribute("aria-label") == "1 of 2 done: 1 of 1 new, 0 of 1 follow-ups"
     line = pg.locator("#summary #wk-due-line")
-    expect(line).to_have_text("Due now: 1 maintenance follow-up")
+    expect(line).to_have_text(DUE_ONE)
     assert line.bounding_box()["y"] >= pg.locator("#week-count").bounding_box()["y"], "under the headline"
     # A voicemail on Next up (Hal) is a follow-up: the line goes, the headline does not move.
     call(pg.locator("#wk-next"))
@@ -665,7 +680,7 @@ def test_the_due_line_follows_a_logged_follow_up_without_waiting_for_the_server(
     wait_week(pg)
     pg.evaluate("() => { const get = BDApi.get; BDApi.get = (p, ...a) => p.indexOf('/api/bd/week') === 0"
                 " ? Promise.reject(new Error('offline')) : get.call(BDApi, p, ...a); }")
-    expect(pg.locator("#wk-due-line")).to_have_text("Due now: 1 maintenance follow-up")
+    expect(pg.locator("#wk-due-line")).to_have_text(DUE_ONE)
     call(pg.locator("#wk-next"))
     sheet(pg).locator('[data-outcome="no_answer"]').click()
     expect(pg.locator("#wk-due-line")).to_have_count(0)
@@ -685,7 +700,7 @@ def test_the_admin_sees_priority_numbers_and_can_act(page_as):
     the seed's score, 82. A salesperson never sees a score."""
     _, pg = page_as("/bd/?owner=1", EMERY)
     wait_week(pg)
-    assert pg.locator('#wk-next [data-act="call"]').count() == 1
+    assert pg.locator(NEXT_CALL).count() == 1
     assert "Maintenance" in pg.inner_text("#wk-next")
     assert not re.search(r"Priority \d+", pg.inner_text("#wk-next")), "a pinned follow-up shows no priority"
     assert "Priority 82" in pg.inner_text("#wk-rest")
@@ -715,8 +730,9 @@ def test_a_maintenance_task_cannot_be_taken_off_even_when_forced(page_as, expect
     _, pg = page_as("/bd/", AVERY)
     wait_week(pg)
     pg.locator("#ten-more-btn").click()
-    expect(pg.locator("#wk-due")).to_contain_text("Nora Lindqvist")
-    expect(pg.locator("#wk-due-line")).to_have_text("Due now: 1 maintenance follow-up")    # Kaw Valley (#828)
+    expect(toasts(pg)).to_contain_text("added below.")
+    expect(pg.locator('#wk-next [data-person="%d"]' % NORA_C)).to_have_count(1)   # Hal's Kaw Valley row (#828)
+    expect(pg.locator("#wk-due-line")).to_have_text(DUE_ONE)
     nora = [t["id"] for t in week_json(pg)["tasks"] if t["contact"]["id"] == NORA_C]
     assert len(nora) == 1
     for act in ("snooze", "done"):
@@ -726,7 +742,7 @@ def test_a_maintenance_task_cannot_be_taken_off_even_when_forced(page_as, expect
     assert [t["status"] for t in w["tasks"] if t["id"] == nora[0]] == ["open"]
     assert (w["due_count"], w["done_count"]) == (1, 1)        # one company: Kaw Valley (#828)
     reload_week(pg)
-    expect(pg.locator('#wk-due [data-task="%d"][data-status="open"]' % nora[0])).to_have_count(1)
+    expect(pg.locator('#wk-next [data-task="%d"][data-status="open"] [data-person="%d"]' % (HAL, NORA_C))).to_have_count(1)
     assert post_status(pg, "/api/bd/tasks/%d/done" % DANA) == {"ok": True}, "a BD task still closes"
 
 
@@ -749,7 +765,7 @@ def test_logging_an_email_on_a_due_maintenance_contact_moves_it_to_done(page_as,
     pg = p.open("/bd/")
     wait_week(pg)
     expect(pg.locator("#wk-next [data-task]")).to_have_attribute("data-task", str(HAL))
-    expect(pg.locator("#wk-due-line")).to_have_text("Due now: 1 maintenance follow-up")
+    expect(pg.locator("#wk-due-line")).to_have_text(DUE_ONE)
     assert node(pg, HAL).first.get_attribute("data-status") == "open", "a note is not a follow-up"
     # then the email, from the page's Email button (the mail app itself is not opened in the test)
     pg = p.open("/bd/contact.html?id=%d" % HAL_C)
@@ -764,7 +780,7 @@ def test_logging_an_email_on_a_due_maintenance_contact_moves_it_to_done(page_as,
     wait_week(pg)
     expect(pg.locator("#wk-next [data-task]")).to_have_attribute("data-task", str(DANA))
     row = pg.locator('#wk-done [data-task="%d"][data-status="done"]' % HAL)
-    expect(row.locator(".wk-outcome")).to_have_text("Emailed · Wed, Nov 4")
+    expect(row.locator(".wk-outcome")).to_have_text("Hal Brecken: Emailed · Wed, Nov 4")
     assert row.locator('[data-act="reopen"]').count() == 0, "no Undo on a done maintenance row"
     assert pg.locator("#wk-due-line").count() == 0 and pg.locator("#wk-due").count() == 0
     assert "1 of 2 done" in summary(pg), "the headline is the 10"
@@ -780,7 +796,7 @@ def test_a_done_maintenance_row_says_how_it_was_followed_up(page_as, expect, kin
     log_by_api(pg, HAL_C, kind, outcome)
     reload_week(pg)
     row = pg.locator('#wk-done [data-task="%d"][data-status="done"]' % HAL)
-    expect(row.locator(".wk-outcome")).to_have_text(word + " · Wed, Nov 4")
+    expect(row.locator(".wk-outcome")).to_have_text("Hal Brecken: " + word + " · Wed, Nov 4")   # Nora is on the row too
     assert row.locator('[data-act="reopen"]').count() == 0, "no Undo on a done maintenance row"
 
 
@@ -792,14 +808,14 @@ def test_a_manager_and_the_admin_see_the_pin_on_a_salespersons_week(page_as, exp
     expect(card).to_have_attribute("data-task", str(HAL))
     pills = visible_pills(card)
     assert MAINT_PILL in pills and "Maintenance" not in pills, pills
-    expect(pg.locator("#wk-due-line")).to_have_text("Due now: 1 maintenance follow-up")
+    expect(pg.locator("#wk-due-line")).to_have_text(DUE_ONE)
     assert "1 of 2 done" in summary(pg) and pg.locator("[data-dot-task]").count() == 2
     if email == DEVON:
         for sel in ['[data-act="call"]', '[data-act="more"]', '[data-act="snooze"]', '[data-act="done"]',
                     '[data-act="reopen"]', "#ten-more-btn"]:
             assert pg.locator(sel).count() == 0, sel
     else:
-        expect(card.locator('[data-act="call"]')).to_be_visible()
+        expect(card.locator('.wk-next-acts [data-act="call"]')).to_be_visible()
         assert_no_take_off(pg, card, "Next up (admin)")
 
 
@@ -812,16 +828,18 @@ def test_the_week_with_every_bd_task_done_is_not_all_done_while_something_is_pin
     expect(pg.locator("#wk-next [data-task]")).to_have_attribute("data-task", str(HAL))
     assert pg.locator(".wk-end.is-all").count() == 0
     assert pg.locator("#wk-rest").count() == 0, "no empty Rest of your 10"
-    expect(pg.locator("#wk-due-line")).to_have_text("Due now: 1 maintenance follow-up")
+    expect(pg.locator("#wk-due-line")).to_have_text(DUE_ONE)
     log_by_api(pg, HAL_C, "sms")
     reload_week(pg)
     expect(pg.locator(".wk-end.is-all")).to_have_count(1)
     assert pg.locator("#wk-due-line").count() == 0 and pg.locator("#wk-due").count() == 0
 
 
-def test_due_now_group_sits_above_the_rest_of_the_10(page_as, expect):
+def test_due_now_group_sits_above_the_rest_of_the_10(env, page_as, expect):
     """Give Me 10 More pins Nora: she is listed under "Due now", between Next up (Hal) and "Rest of
-    your 10" (Dana only), with no take-off; once she is followed up the group is gone."""
+    your 10" (Dana only), with no take-off; once she is followed up the group is gone. Nora is moved
+    to a company of her own first (Osage Plains Brewing): at Kaw Valley she would be on Hal's row."""
+    nora_elsewhere(env)
     _, pg = page_as("/bd/", AVERY)
     wait_week(pg)
     pg.locator("#ten-more-btn").click()
@@ -839,7 +857,8 @@ def test_due_now_group_sits_above_the_rest_of_the_10(page_as, expect):
     assert pg.locator("#wk-due").count() == 0 and pg.locator("#wk-due-h").count() == 0
 
 
-def test_give_me_10_more_never_puts_a_pinned_task_in_the_extra_ten(page_as, expect):
+def test_give_me_10_more_never_puts_a_pinned_task_in_the_extra_ten(env, page_as, expect):
+    nora_elsewhere(env)
     _, pg = page_as("/bd/", AVERY)
     wait_week(pg)
     pg.locator("#ten-more-btn").click()
@@ -850,7 +869,7 @@ def test_give_me_10_more_never_puts_a_pinned_task_in_the_extra_ten(page_as, expe
     assert [t["contact"]["id"] for t in pinned] == [NORA_C]
     assert pg.locator("#wk-due [data-task]").evaluate_all("els => els.map(e => e.dataset.task)") == [str(pinned[0]["id"])]
     assert pg.locator('.wk-extra [data-task="%d"]' % pinned[0]["id"]).count() == 0
-    expect(pg.locator("#wk-due-line")).to_have_text("Due now: 1 maintenance follow-up")    # Kaw Valley (#828)
+    expect(pg.locator("#wk-due-line")).to_have_text("Due now: 2 maintenance accounts")    # Kaw Valley, Osage
     pills = visible_pills(node(pg, pinned[0]["id"]))
     assert MAINT_PILL in pills and "Maintenance" not in pills, pills
     assert_no_take_off(pg, node(pg, pinned[0]["id"]), "the extra ten's pinned task")
@@ -861,6 +880,7 @@ def test_a_pinned_row_keeps_its_key_account_pill_beside_the_due_pill(env, page_a
     is made a confirmed key account (an unconfirmed contact's slot says "Needs confirming" first)."""
     _base, url, _b = env
     run_sql(url, "update contacts set importance = 3, confirmed = true where id = %s", (NORA_C,))
+    nora_elsewhere(env)
     _, pg = page_as("/bd/", AVERY)
     wait_week(pg)
     pg.locator("#ten-more-btn").click()
@@ -877,6 +897,7 @@ def test_a_date_in_a_due_reason_does_not_break_across_lines(env, page_as, viewpo
     _base, url, _b = env
     run_sql(url, "insert into interactions (contact_id, kind, occurred_at, summary, user_id)"
                  " values (%s, 'email', '2026-03-02 15:00:00+00', 'Sent the care sheet.', 1)", (NORA_C,))
+    nora_elsewhere(env)
     _, pg = page_as("/bd/", AVERY, viewport)
     wait_week(pg)
     pg.locator("#ten-more-btn").click()
@@ -1013,16 +1034,16 @@ def test_at_1280_beside_the_tray_rows_stay_two_lines(page_as):
     settled(pg)
     heights = pg.locator("#wk-rest .wk-row").evaluate_all("rs => rs.map(r => r.getBoundingClientRect().height)")
     assert heights and max(heights) <= 96, heights
-    call_box = pg.locator('#wk-next [data-act="call"]').bounding_box()
-    more = pg.locator('#wk-next [data-act="more"]').bounding_box()
+    call_box = pg.locator(NEXT_CALL).bounding_box()
+    more = pg.locator(NEXT_MORE).bounding_box()
     assert abs(more["y"] - call_box["y"]) <= 24, "More sits beside Call"
     log_by_api(pg, HAL_C, "email")
     reload_week(pg)
     settled(pg)
     assert node(pg, DANA).evaluate("el => !!el.closest('#wk-next')")
-    call_box = pg.locator('#wk-next [data-act="call"]').bounding_box()
+    call_box = pg.locator(NEXT_CALL).bounding_box()
     snooze = pg.locator('#wk-next [data-act="snooze"]').bounding_box()
-    more = pg.locator('#wk-next [data-act="more"]').bounding_box()
+    more = pg.locator(NEXT_MORE).bounding_box()
     assert abs(more["y"] - snooze["y"]) <= 4, "Not this week and More share a line"
     assert snooze["y"] - call_box["y"] <= call_box["height"] + 16, "the buttons take two lines at most"
     card = pg.locator("#wk-next .wk-next").bounding_box()
@@ -1033,10 +1054,10 @@ def test_on_a_phone_the_pin_fits_and_its_buttons_stay_tappable(page_as, expect):
     _, pg = page_as("/bd/", AVERY, PHONE)
     wait_week(pg)
     card = pg.locator("#wk-next [data-task]")
-    expect(pg.locator("#wk-due-line")).to_have_text("Due now: 1 maintenance follow-up")
+    expect(pg.locator("#wk-due-line")).to_have_text(DUE_ONE)
     expect(card.locator("p.wk-next-stays")).to_be_visible()
     assert MAINT_PILL in visible_pills(card)
-    for name, sel in (("Call", '#wk-next [data-act="call"]'), ("More", '#wk-next [data-act="more"]:visible')):
+    for name, sel in (("Call", NEXT_CALL), ("More", NEXT_MORE + ":visible")):
         b = pg.locator(sel).first.bounding_box()
         assert b["height"] >= 44 - 0.5 and b["width"] >= 44 - 0.5, "%s is %sx%s" % (name, b["width"], b["height"])
     for name, sel in (("stays line", "#wk-next p.wk-next-stays"), ("due line", "#wk-due-line")):
@@ -1053,7 +1074,7 @@ def test_on_a_phone_a_row_with_no_phone_number_can_still_be_taken_off(env, page_
     run_sql(url, "update contacts set phone = null where id = %s", (DANA_C,))
     _, pg = page_as("/bd/", AVERY, PHONE)
     wait_week(pg)
-    more = node(pg, DANA).locator('[data-act="more"]')
+    more = node(pg, DANA).locator('.wk-co-head [data-act="more"]')
     expect(more).to_be_visible()
     b = more.bounding_box()
     assert b["x"] + b["width"] <= PHONE["width"] + 0.5 and b["height"] >= 44 - 0.5, b
@@ -1065,3 +1086,133 @@ def test_on_a_phone_a_row_with_no_phone_number_can_still_be_taken_off(env, page_
     pg.keyboard.press("Enter")
     expect(toasts(pg)).to_contain_text("Taken off this week.")
     expect(pg.locator('#wk-done [data-task="%d"][data-status="snoozed"]' % DANA)).to_have_count(1)
+
+
+# ── one row per company (#828) ───────────────────────────────────────────────────────────────────
+# Sue Marlow, a second BD person of Avery's at Prairie Ridge Builders LLC (Dana's company), added for
+# these tests only: Dana's row (task 302) then holds Dana (to call first) and Sue.
+LONG_NAME = "Prairie Ridge Builders and Industrial Flooring Contractors of Greater Kansas City LLC"
+
+
+def add_sue(env, long_name=False):
+    url = env[1]
+    if long_name:
+        run_sql(url, "update companies set name = %s where id = 10", (LONG_NAME,))
+    return run_sql(url, "insert into contacts (company_id, name, title, phone, email, category, owner_id, source,"
+                        " confirmed) values (10, 'Sue Marlow', 'Estimator', '913-555-0107', 'sue.marlow@example.com',"
+                        " 'bd', 1, 'manual', true) returning id")[0]["id"]
+
+
+def test_a_company_row_opens_with_a_click_enter_or_space_and_says_so(env, page_as, expect):
+    sue = add_sue(env)
+    _, pg = page_as("/bd/", AVERY)
+    wait_week(pg)
+    row = node(pg, DANA)
+    toggle = row.locator('[data-act="toggle"]')
+    people = row.locator(".wk-co-body")
+    assert row.locator(".wk-co-name").inner_text().strip() == "Prairie Ridge Builders LLC"
+    assert row.locator(".wk-co-first").inner_text().strip() == "Dana Whitlow · Project Manager · +1 more"
+    expect(toggle).to_have_attribute("aria-expanded", "false")
+    expect(people).to_be_hidden()
+    toggle.click()
+    expect(toggle).to_have_attribute("aria-expanded", "true")
+    expect(row.locator('[data-person="%d"]' % sue)).to_be_visible()
+    assert row.locator("[data-person]").evaluate_all("els => els.map(e => +e.dataset.person)") == [DANA_C, sue]
+    expect(row.locator('[data-person="%d"]' % sue)).to_contain_text("Estimator · 913-555-0107")
+    expect(row.locator('[data-person="%d"]' % sue)).to_contain_text("No live talk yet")
+    pg.keyboard.press("Enter")
+    expect(toggle).to_have_attribute("aria-expanded", "false")
+    expect(people).to_be_hidden()
+    pg.keyboard.press("Space")
+    expect(toggle).to_have_attribute("aria-expanded", "true")
+    assert toggle.evaluate("el => el === document.activeElement"), "the toggle keeps focus"
+    # a click on the head's reason opens and closes it too
+    row.locator(".wk-co-head .wk-reason").click()
+    expect(toggle).to_have_attribute("aria-expanded", "false")
+    assert pg.locator("[data-task]").count() == 3, "Hal's Kaw Valley row, Dana's company row and Priya's done row"
+
+
+def test_calling_someone_else_there_logs_on_them_and_closes_the_row(env, page_as, expect):
+    """The call sheet logs on the person called (Sue), not the person to call first (Dana); the row
+    closes once (the 10 is all done), and its done line names Sue."""
+    sue = add_sue(env)
+    _, pg = page_as("/bd/", AVERY)
+    wait_week(pg)
+    dana_before = len(history(pg, DANA_C))
+    node(pg, DANA).locator('[data-act="toggle"]').click()
+    node(pg, DANA).locator('[data-person="%d"] [data-act="call"]' % sue).click()
+    expect(sheet(pg)).to_be_visible()
+    sheet(pg).locator('[data-outcome="voicemail"]').click()
+    expect(sheet(pg).locator("[data-saved]")).to_contain_text("Saved as Voicemail")
+    calls = history(pg, sue)
+    assert [(c["kind"], c["outcome"]) for c in calls] == [("voicemail", "voicemail")], calls
+    assert len(history(pg, DANA_C)) == dana_before, "nothing logged on Dana"
+    done = pg.locator('#wk-done [data-task="%d"][data-status="done"]' % DANA)
+    expect(done.locator(".wk-outcome")).to_have_text("Sue Marlow: Voicemail · Wed, Nov 4")
+    expect(pg.locator("#week-count")).to_have_text("All 2 done")
+    w = week_json(pg)
+    assert (w["done_count"], w["total"]) == (2, 2)
+
+
+def test_not_the_right_person_flags_that_person_and_the_row_stays_open(env, page_as, expect):
+    """Sue is marked not the right person from her own menu inside the row: she needs confirming,
+    Dana does not, and the row stays open because Dana can still be called."""
+    sue = add_sue(env)
+    _, pg = page_as("/bd/", AVERY)
+    wait_week(pg)
+    row = node(pg, DANA)
+    row.locator('[data-act="toggle"]').click()
+    row.locator('[data-person="%d"] [data-act="more"]' % sue).click()
+    acts = menu_acts(pg)
+    assert acts == ["log-meeting", "nrp", "open"], acts
+    pg.locator('.menu [data-act="nrp"]').click()
+    expect(sheet(pg).locator('[data-field="nrp"]')).to_be_visible()
+    sheet(pg).locator('[data-act="rec-confirm"]').click()
+    expect(toasts(pg)).to_contain_text("Marked as needs confirming.")
+    assert api(pg, "/api/bd/contacts/%d" % sue)["contact"]["confirmed"] is False
+    assert api(pg, "/api/bd/contacts/%d" % DANA_C)["contact"]["confirmed"] is True
+    expect(pg.locator('#wk-rest [data-task="%d"][data-status="open"]' % DANA)).to_have_count(1)
+    reload_week(pg)
+    row = node(pg, DANA)
+    row.locator('[data-act="toggle"]').click()
+    expect(row.locator('[data-person="%d"]' % sue)).to_contain_text("Not the right person")
+    assert "1 of 2 done" in summary(pg)
+
+
+def test_done_on_the_opened_row_closes_the_whole_company(env, page_as, expect):
+    add_sue(env)
+    _, pg = page_as("/bd/", AVERY)
+    wait_week(pg)
+    row = node(pg, DANA)
+    row.locator('[data-act="toggle"]').click()
+    row.locator('.wk-co-foot [data-act="done"]').click()
+    expect(toasts(pg)).to_contain_text("Done. Nothing logged.")
+    expect(pg.locator('#wk-done [data-task="%d"][data-status="done"]' % DANA)).to_have_count(1)
+    expect(pg.locator("#week-count")).to_have_text("All 2 done")
+    w = week_json(pg)
+    assert [r["status"] for r in w["rows"] if r["id"] == DANA] == ["done"]
+
+
+@pytest.mark.parametrize("viewport", [PHONE, {"width": 320, "height": 700}], ids=["390", "320"])
+def test_company_rows_fit_a_phone_with_a_long_name(env, page_as, expect, viewport):
+    """Long labels wrap (a long company name, a title, a next step); nothing scrolls sideways, open or
+    closed, and the toggle and every Call stay big enough to tap."""
+    sue = add_sue(env, long_name=True)
+    run_sql(env[1], "update contacts set next_step = 'Send the epoxy sample board and the cove base detail',"
+                    " next_step_date = '2026-11-06' where id = %s", (DANA_C,))
+    _, pg = page_as("/bd/", AVERY, viewport)
+    wait_week(pg)
+    settled(pg)
+    assert sideways(pg) <= 1, "closed rows scroll sideways at %d" % viewport["width"]
+    row = node(pg, DANA)
+    toggle = row.locator('[data-act="toggle"]')
+    toggle.click()
+    expect(row.locator('[data-person="%d"]' % sue)).to_be_visible()
+    assert sideways(pg) <= 1, "an opened row scrolls sideways at %d" % viewport["width"]
+    for el in [toggle] + [row.locator('[data-person] [data-act="call"]').nth(i) for i in range(2)]:
+        b = el.bounding_box()
+        assert b["height"] >= 44 - 0.5 and b["x"] + b["width"] <= viewport["width"] + 0.5, b
+    card = pg.locator("#wk-rest .card").bounding_box()
+    for sel in (".wk-co-name", ".wk-p-facts", ".wk-p-who"):
+        for b in [x.bounding_box() for x in row.locator(sel).all() if x.is_visible()]:
+            assert b["x"] + b["width"] <= card["x"] + card["width"] + 0.5, (sel, b)
