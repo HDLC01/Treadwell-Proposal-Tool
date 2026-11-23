@@ -88,22 +88,24 @@ def friday_counts(conn, owner_id, week_start) -> dict:
     part of the 10) (BDCore.weeklyProgress over the rows; api.js fridayTasks: the latest one, which is
     the one a forced re-run has not replaced)."""
     rows = conn.execute(
-        "select t.status, c.company_id from tasks t join task_batches b on b.id = t.batch_id"
+        "select t.kind, t.batch_id, t.status, c.company_id from tasks t join task_batches b on b.id = t.batch_id"
         " join contacts c on c.id = t.contact_id"
         " where b.owner_id = %s and b.week_start = %s and b.kind = 'friday' and b.replaced_at is null"
         " and t.kind <> 'maintenance' order by t.id",
         (owner_id, week_start)).fetchall()
-    by_company: dict = {}
+    groups: dict = {}
     for r in rows:
-        by_company.setdefault(r["company_id"], []).append(r["status"])
-    p = pacemod.weekly_progress([{"status": company_facts.row_status(s)} for s in by_company.values()])
+        groups.setdefault(_row_key(r["kind"], r["batch_id"], r["company_id"]), []).append(r["status"])
+    p = pacemod.weekly_progress([{"status": company_facts.row_status(s)} for s in groups.values()])
     return {"done_count": p["done"], "total": p["total"]}
 
 
 # ── company rows (#828) ──────────────────────────────────────────────────────────────────────
 def _row_key(kind, batch_id, company_id) -> tuple:
-    """Which row a task is on: the "Due now" group for a maintenance task, else its batch; then its
-    company. _row_tasks finds the same tasks in SQL."""
+    """THE ROW: which row a task is on. The "Due now" group for a maintenance task, else its batch;
+    then its company (its person's company now). week_rows and friday_counts group by it, _row_tasks
+    finds the same tasks in SQL. (Logging a call closes more than one row on purpose: every open BD
+    row at the company this week, interactions_service.close_current_task.)"""
     return ("due", company_id) if kind == "maintenance" else (batch_id, company_id)
 
 
@@ -128,7 +130,8 @@ def load_row_people(conn, owner_id, company_ids, contact_ids) -> list:
 def row_people(people, owner_id, company_id, maintenance, task_contact_ids) -> list:
     """The people a row shows (`people` from load_row_people): the row's task people first, in task
     order (the first is the person to call first), then the owner's other people at the company on
-    the row's tab (maintenance for a "Due now" row, else BD), by name."""
+    the row's tab (maintenance for a "Due now" row, else BD), by name. (week_rows then moves anyone
+    marked not the right person on the row to the end.)"""
     by_id = {p["id"]: p for p in people}
     first = [by_id[c] for c in dict.fromkeys(task_contact_ids) if c in by_id]
     tab = "maintenance" if maintenance else "bd"
@@ -151,20 +154,19 @@ def week_rows(conn, owner_id, tasks, batches) -> list:
     company_ids = {key[1] for key in groups}
     facts = company_facts.load(conn, company_ids)
     people = load_row_people(conn, owner_id, company_ids, {t["contact"]["id"] for t in tasks})
-    flagged = {(r["contact_id"], r["task_id"]) for r in conn.execute(
-        "select contact_id, data->>'task_id' as task_id from events where kind = 'unconfirmed'"
-        " and data->>'via' = 'not_right_person' and data->>'task_id' = any(%s::text[])",
-        ([str(t["id"]) for t in tasks],)).fetchall()}
+    flagged = company_facts.flagged(conn, [t["id"] for t in tasks])
     out = []
     for (place, company_id), row in groups.items():
         task_of: dict = {}
         for t in row:
             task_of.setdefault(t["contact"]["id"], t["id"])
-        ids = [str(t["id"]) for t in row]
-        persons = [serialize.week_row_person(p, task_of.get(p["id"]), any((p["id"], i) in flagged for i in ids))
+        persons = [serialize.week_row_person(p, task_of.get(p["id"]), any((p["id"], t["id"]) in flagged for t in row))
                    for p in row_people(people, owner_id, company_id, place == "due", [t["contact"]["id"] for t in row])]
+        # Someone marked not the right person on this row goes last (a stable sort): the row's first
+        # person, whom its Call and Next up's Call dial, is someone who may still be the right one.
+        persons.sort(key=lambda x: x["not_right_person"])
         out.append(serialize.week_row(_section(row[0], live, kinds), row,
-                                      company_facts.row_status(t["status"] for t in row),
+                                      company_facts.row_status((t["status"] for t in row), due=place == "due"),
                                       row[0]["contact"]["company"], facts.get(company_id), persons))
     return out
 
@@ -283,7 +285,7 @@ def _row_tasks(conn, task) -> list:
 
 
 def _row_status(row) -> str:
-    return company_facts.row_status(t["status"] for t in row)
+    return company_facts.row_status((t["status"] for t in row), due=row[0]["kind"] == "maintenance")
 
 
 def _ids(row) -> list:

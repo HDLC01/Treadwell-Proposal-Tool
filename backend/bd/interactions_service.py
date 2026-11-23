@@ -78,12 +78,6 @@ def is_touch(kind, outcome) -> bool:
     return kind == "call" and outcome in ("answered", "meeting_set")
 
 
-def is_missed(kind, outcome) -> bool:
-    """A voicemail or a no-answer call: the "Send follow-up" card's attempts, and a company's misses
-    (#828: company_facts.is_miss is the one rule)."""
-    return company_facts.is_miss(kind, outcome)
-
-
 def normalize_kind(kind, outcome):
     """(kind, outcome) as stored. A call with outcome voicemail IS a voicemail; a non-call kind
     has no outcome. InteractionInputError for an unknown kind or a call without a valid outcome."""
@@ -227,11 +221,13 @@ def closes_task(task_kind, interaction_kind) -> bool:
 def close_current_task(conn, contact_id, done_at, kind, today=None):
     """Close the company's row (#828): mark done every OPEN new/followup task on this week's lists
     (any batch, any owner) of anyone at the contact's company, when an interaction of `kind` closes
-    it (closes_task). Returns the contact's own closed task (the latest: from the latest batch, as
-    current_task picks), else the first one closed, or None when nothing was open: a second call to
-    someone else there the same week closes nothing more. A maintenance task is not closed here but by settle_maintenance_tasks: it leaves
-    the list when the contact stops being due, not merely because something was logged."""
-    if not closes_task("followup", kind):
+    it (company_facts.ROW_CLOSE_KINDS, answer 4). Any owner on purpose: a call with anyone there
+    reached the company, whoever's list it is on. Returns the contact's own closed task (the latest:
+    from the latest batch, as current_task picks), else the first one closed, or None when nothing was
+    open: a second call to someone else there the same week closes nothing more. A maintenance task is
+    not closed here but by settle_maintenance_tasks: it leaves the list when the contact stops being
+    due, not merely because something was logged."""
+    if kind not in company_facts.ROW_CLOSE_KINDS:
         return None
     ws = bizdate.week_start(today or bizdate.today_central())
     rows = conn.execute(
@@ -330,7 +326,7 @@ def log_interaction(conn, contact_id, actor, *, kind, outcome=None, occurred_at=
     crow = recompute_contact(conn, contact_id)
     rec = make_recommendation(conn, crow, irow, created_at=now) if recommend and kind in TASK_KINDS else None
     return {"interaction": irow, "contact": crow, "task": task, "recommendation": rec,
-            "missed_call": is_missed(kind, outcome)}
+            "missed_call": company_facts.is_miss(kind, outcome)}
 
 
 def direction_for(kind, direction):

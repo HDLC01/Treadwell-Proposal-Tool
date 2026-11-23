@@ -557,6 +557,17 @@
 .bd-app .bd-import-kv dt { color: var(--bd-ink-2); }
 .bd-app .bd-import-kv dd { margin: 0; min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
 .bd-app .bd-import-errors { margin: 6px 0 0; padding-left: 18px; color: var(--bd-ink-2); font-size: 13px; }
+
+/* A collapsible BD account row's building, name and chevron, one look on Contacts (#810) and This
+   Week (#828): BD.coIconHTML / BD.coChevHTML inside the row's toggle, whose aria-expanded="true"
+   draws them open. Each page keeps only its own layout rules. */
+.bd-app .bd-co-ico { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 38px; height: 38px;
+  border-radius: 9px; color: var(--bd-ink-2); background: var(--bd-recessed); border: 1px solid var(--bd-line); }
+.bd-app [aria-expanded="true"] > .bd-co-ico { color: var(--bd-link); background: var(--bd-nav-active); border-color: transparent; }
+.bd-app .bd-co-name { font-size: 14.5px; font-weight: 700; line-height: 1.3; overflow-wrap: anywhere; }
+.bd-app .bd-co-chev { display: inline-flex; flex: none; color: var(--bd-ink-2); transition: transform .15s var(--bd-ease); }
+.bd-app [aria-expanded="true"] > .bd-co-chev { color: var(--bd-link); transform: rotate(90deg); }
+
 /* == end: components == */
 
 /* == page: week == */
@@ -678,15 +689,10 @@
   padding: 0; border: 0; background: none; color: var(--bd-ink); font: inherit; text-align: left; cursor: pointer; }
 .bd-app .wk-co-toggle.is-static { cursor: default; }
 .bd-app .wk-co-toggle:focus-visible { outline-offset: 2px; }
-.bd-app .wk-co-ico { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 40px; height: 40px;
-  border-radius: 9px; color: var(--bd-ink-2); background: var(--bd-recessed); border: 1px solid var(--bd-line); }
-.bd-app .wk-co.is-open .wk-co-ico { color: var(--bd-link); background: var(--bd-nav-active); border-color: transparent; }
 .bd-app .wk-co-main { display: flex; flex: 1 1 auto; flex-direction: column; gap: 1px; min-width: 0; }
-.bd-app .wk-co-name { font-size: 14px; font-weight: 700; line-height: 1.35; overflow-wrap: anywhere; }
 .bd-app .wk-co-first { font-size: 13px; line-height: 1.4; color: var(--bd-ink-2); overflow-wrap: anywhere; }
 .bd-app .wk-co-misses { font-size: 12.5px; font-weight: 600; line-height: 1.4; color: var(--bd-warn); }
-.bd-app .wk-co-chev { display: inline-flex; flex: none; align-self: center; color: var(--bd-ink-2); transition: transform .15s var(--bd-ease); }
-.bd-app .wk-co.is-open .wk-co-chev { color: var(--bd-link); transform: rotate(90deg); }
+.bd-app .wk-co-toggle > .bd-co-chev { align-self: center; }
 .bd-app .wk-co-body { padding: 4px 16px 12px 68px; background: var(--bd-paper); border-top: 1px solid var(--bd-line); }
 .bd-app .wk-co-foot { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 10px; }
 .bd-app .wk-co-note { padding-top: 10px; font-size: 13px; color: var(--bd-ink-2); }
@@ -709,7 +715,7 @@
   .bd-app .wk-person { grid-template-columns: 32px minmax(0, 1fr) auto; grid-template-areas: "av who acts" "av facts facts";
     align-items: start; }
   .bd-app .wk-co-toggle { gap: 10px; }
-  .bd-app .wk-co-ico { width: 32px; height: 32px; }
+  .bd-app .wk-co-toggle > .bd-co-ico { width: 32px; height: 32px; }
   .bd-app .wk-co-foot .btn { flex: 1 1 auto; }
 }
 .bd-app .wk-reason { grid-area: reason; min-width: 0; font-size: 13px; font-weight: 400; color: var(--bd-ink-2); line-height: 20px; text-wrap: pretty; }
@@ -1062,11 +1068,7 @@
 .bd-app .ct-acct-toggle { flex: 1 1 auto; min-width: 0; min-height: 62px; padding: 12px 0 12px 14px; color: var(--bd-ink); text-align: left;
   background: none; border: 0; cursor: pointer; }
 .bd-app .ct-acct-toggle:focus-visible { outline-offset: -2px; }
-.bd-app .ct-acct-ico { display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 38px; border-radius: 9px;
-  color: var(--bd-ink-2); background: var(--bd-recessed); border: 1px solid var(--bd-line); }
-.bd-app .ct-acct.is-open .ct-acct-ico { color: var(--bd-link); background: var(--bd-nav-active); border-color: transparent; }
 .bd-app .ct-acct-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.bd-app .ct-acct-name { font-size: 14.5px; font-weight: 700; line-height: 1.3; overflow-wrap: anywhere; }
 .bd-app .ct-acct-meta { font-size: 12px; color: var(--bd-ink-2); }
 .bd-app .ct-phone-only { display: none; }
 .bd-app .ct-flags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
@@ -1075,8 +1077,6 @@
 .bd-app .ct-owner { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bd-app .ct-plus { font-weight: 600; color: var(--bd-ink-2); }
 .bd-app .ct-none { color: var(--bd-ink-2); }
-.bd-app .ct-chev { display: inline-flex; color: var(--bd-ink-2); transition: transform .15s var(--bd-ease); }
-.bd-app .ct-acct.is-open .ct-chev { color: var(--bd-link); transform: rotate(90deg); }
 .bd-app .ct-more, .bd-app .ct-more-gap { flex: none; width: 36px; }
 .bd-app .ct-more[aria-expanded="true"] { color: var(--bd-ink); background: var(--bd-recessed); }
 

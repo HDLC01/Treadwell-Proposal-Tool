@@ -334,15 +334,17 @@ first (`maintenance_due_date` ascending, a contact never followed up before any 
 id), then everyone else (business development) by score, highest first, then by contact id.
 
 **The Weekly 10 is ten companies (#828; `weekly.rank_companies`, the rules in
-`backend/bd/company_facts.py`).** Each person is scored with their **company's** tries and 3-day rest
-laid over their own: the tries part is the company's **misses** (a voicemail or a call nobody answered,
+`backend/bd/company_facts.py`).** Each BD person is scored with their **company's** tries and 3-day
+rest laid over their own (a due maintenance person keeps their own, as before #828): the tries part is the company's **misses** (a voicemail or a call nobody answered,
 with anyone there who is not archived, whoever owns them, dated on or before today in Central, since
 the last live talk with anyone there), and "tried in the last 3 days" means anyone there was called or
 left a voicemail in the last 3 days. The cadence part ("last live talk", "never had a live talk") stays
 the person's own. A company where anyone is already on the list being built (the same facts as above,
 per company) is left out whole. Each company then takes **one** pick: its best person, first in the
 order above. Its `kind` is the company's: `new` only while nobody there has had a live talk, else
-`followup`, whatever the person's own history. The 5 + 5 split and Give Me 10 More's `n` count these
+`followup`, whatever the person's own history. Its reason is worded for the company: at a `followup`
+company, a best person who never talked live reads "N tries since the last live talk" (as the row's
+misses line does), not "Never reached after N tries". The 5 + 5 split and Give Me 10 More's `n` count these
 company picks. A company with a due maintenance person is a maintenance row: every due person there
 gets their own `maintenance` task (the follow-up is still per person) and the company takes no BD slot.
 
@@ -491,15 +493,20 @@ week built before it can hold two people at one company, and they are one row al
 - `kind`, `reason`, `reasons`, `score`, `batch_id` are the first task's: the person suggested first.
   `kind` is the company's (`new` only while nobody there has had a live talk). `score` is shown to
   managers only.
-- `status`: `open` while any task of the row is open, else `done` when any is done, else `snoozed`
-  (taken off). `done_at` / `snoozed_until` are the first of its tasks that has one.
+- `status`: a BD row (`ten`, `more`, `replaced`) is `done` once any of its tasks is done (someone
+  there was reached), else `open` while any is open, else `snoozed` (taken off); a `due` row is `open`
+  while any task is open (someone there is still due), else `done` when any is done, else `snoozed`.
+  A row of several tasks comes from a week built before #828, a #810 move or a #811 merge.
+  `done_at` / `snoozed_until` are the first of its tasks that has one.
 - `misses` and `last_live_at` are the **company's**, over everyone there who is not archived, whoever
   owns them, as of today (Central): the misses since the last live talk with anyone there. The page
   words it "Never reached after N tries" when `last_live_at` is null, else "N tries since the last
   live talk".
 - `people`: the people the row's tasks are for first, in task order (the first is the person to call
   first), then the other people **the week's owner** owns at the company on the row's tab
-  (maintenance for a `due` row, else BD) who are not archived, by name. Each person's
+  (maintenance for a `due` row, else BD) who are not archived, by name; anyone marked not the right
+  person on this row goes last, so the first person (whom the row's Call dials) can still be the right
+  one. Each person's
   `last_live_at` and `attempts_since_live` are their own; `task_id` is this row's task for them, or
   null; `not_right_person` is true once they were marked not the right person on this row.
 

@@ -26,7 +26,7 @@ from typing import Any
 
 from fastapi import Body, Depends, Request
 
-from .. import appsettings, auth, bizdate, db, errors, interactions_service, paging, serialize, web
+from .. import appsettings, auth, bizdate, company_facts, db, errors, interactions_service, paging, serialize, web
 from ..contacts_service import (BD_FREQUENCY_SENTENCE, CATEGORIES, CONTACT_NOT_FOUND, DATE_FIELDS, FIX, NAME_MAX,
                                 TEXT_DEFAULT_MAX, TEXT_FIELDS, as_int, check_date, check_tags, check_text,
                                 company_spec_ok, create_contact, default_frequency, find_duplicates,
@@ -196,11 +196,11 @@ def _pending_recommendation(conn, contact_id):
 def _missed_call(conn, summary_row):
     """api.js getContact: only the latest voicemail / no-answer call counts. It gets the card when
     nobody has talked live since, it is at most 14 Central days old, and nobody has sent a
-    follow-up or said "Nothing" for it. The WHERE is interactions_service.is_missed in SQL."""
+    follow-up or said "Nothing" for it. The WHERE is a miss, company_facts.MISS_SQL (#828)."""
     i = conn.execute(
-        "select id, occurred_at, followup_status from interactions where contact_id = %s"
-        " and (kind = 'voicemail' or (kind = 'call' and outcome = 'no_answer'))"
-        " order by occurred_at desc, id limit 1", (summary_row["id"],)).fetchone()
+        "select i.id, i.occurred_at, i.followup_status from interactions i where i.contact_id = %s"
+        " and " + company_facts.MISS_SQL + " order by i.occurred_at desc, i.id limit 1",
+        (summary_row["id"],)).fetchone()
     if i is None:
         return None
     live = summary_row.get("last_live_at")

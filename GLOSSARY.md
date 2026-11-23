@@ -274,8 +274,8 @@ A task on This Week for one person at a Maintenance account whose follow-up is d
 _Avoid_: Pinned task, maintenance task
 
 **Miss**:
-A call to someone at a BD account that reached nobody: a voicemail, or a call nobody answered. Misses count for the whole BD account, whoever was called, by their Central date, and go back to 0 after a live talk with anyone there. A BD account's misses are the tries part of its score.
-_Avoid_: Missed call (that is the "Send follow-up" card on one contact), attempt, try (that also counts answered calls)
+A call to someone at a BD account that reached nobody: a voicemail, or a call nobody answered. Misses count for the whole BD account, whoever was called, by their Central date, and go back to 0 after a live talk with anyone there. A BD account's misses are the tries part of its score. On the page they read as tries ("Never reached after 2 tries", "2 tries since the last live talk"), the words the salesperson already uses; in code and in talk about the rules, say miss.
+_Avoid_: Missed call (that is the "Send follow-up" card on one contact), attempt, try (in the rules a try is any call or voicemail, answered or not: what the 3-day rest counts)
 
 **BD Admin page**:
 The BD CRM's own Admin page, where a BD admin sets each person's BD login and BD role and the BD settings, and an assistant or BD admin handles Unmatched calls and sees past Workbook imports. It is separate from the proposal tool's Admin page: neither changes what the other holds. Only a BD admin has it in the sidebar; an assistant reaches it from the Contacts page.

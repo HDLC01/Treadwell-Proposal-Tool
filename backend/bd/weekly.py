@@ -29,10 +29,11 @@ PURE RULES (no database)
                    (the Picks that become its tasks: that one person, or every due maintenance person)
 
 THE WEEKLY 10 IS TEN COMPANIES (#828). The builds rank companies, not people (rank_companies): every
-person is scored by the rules below with the COMPANY's tries and 3-day rest laid over their own
-(company_facts.score_facts), a company already on the list being built is left out whole, and each
-company takes ONE pick: its best person (the first of the ranking), with the company's kind ("new"
-only when nobody there has had a live talk, company_facts.company_kind). A company with a due
+BD person is scored by the rules below with the COMPANY's misses and 3-day rest laid over their own
+(company_facts.score_facts; a due maintenance person keeps their own, as before), a company already on
+the list being built is left out whole, and each company takes ONE pick: its best person (the first
+of the ranking), with the company's kind ("new" only when nobody there has had a live talk,
+company_facts.company_kind) and its chip worded for the company (company_facts.reason_words). A company with a due
 maintenance person is a maintenance row: every due person there gets their own pinned task (the
 cycle is still per person) and the company takes no BD slot. pick_weekly and pick_next then work on
 these company picks unchanged, so the 5 + 5 split and "the next 10" count companies. The per-person
@@ -243,7 +244,7 @@ def rank_companies(contacts: Any, facts_by_id: Any, companies: Any, today: Any, 
     facts: dict = {}
     for c in contacts or []:
         key = _company_key(c)
-        f = company_facts.score_facts(companies.get(key))
+        f = company_facts.score_facts(companies.get(key), task_kind(c))
         own = _facts_for(facts_by_id, c["id"])
         if task_kind(c) != "maintenance" and key in busy:
             own["has_open_task"] = True
@@ -266,7 +267,8 @@ def rank_companies(contacts: Any, facts_by_id: Any, companies: Any, today: Any, 
         if r["kind"] == "maintenance" or key in groups:
             continue
         kind = company_facts.company_kind(companies[key]) if key in companies else r["kind"]
-        best = dict(r, kind=kind)
+        reasons = company_facts.reason_words(r["reasons"], r["contact"], companies.get(key))
+        best = dict(r, kind=kind, reasons=reasons, reason=priority.reason_text(reasons))
         groups[key] = dict(best, company_id=key, members=[best])
         out.append(groups[key])
     return out

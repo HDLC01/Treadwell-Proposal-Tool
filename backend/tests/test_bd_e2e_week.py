@@ -1187,6 +1187,43 @@ def test_not_the_right_person_flags_that_person_and_the_row_stays_open(env, page
     assert "1 of 2 done" in summary(pg)
 
 
+def test_after_not_the_right_person_the_rows_call_dials_someone_else_there(env, page_as, expect):
+    """Dana is marked not the right person on her own row: the row stays open (Sue can be called),
+    and the row's Call now dials Sue (913-555-0107), not the person just flagged."""
+    sue = add_sue(env)
+    _, pg = page_as("/bd/", AVERY)
+    wait_week(pg)
+    row = node(pg, DANA)
+    expect(row.locator('.wk-row-call [data-act="call"]')).to_have_attribute("href", "tel:+19135550101")
+    row.locator('[data-act="toggle"]').click()
+    row.locator('[data-person="%d"] [data-act="more"]' % DANA_C).click()
+    pg.locator('.menu [data-act="nrp"]').click()
+    expect(sheet(pg).locator('[data-field="nrp"]')).to_be_visible()
+    sheet(pg).locator('[data-act="rec-confirm"]').click()
+    expect(toasts(pg)).to_contain_text("Marked as needs confirming.")
+    row = pg.locator('#wk-rest [data-task="%d"][data-status="open"]' % DANA)
+    expect(row.locator('.wk-row-call [data-act="call"]')).to_have_attribute("href", "tel:+19135550107")
+    expect(row.locator(".wk-co-first")).to_have_text("Sue Marlow · Estimator · +1 more")
+    assert row.locator("[data-person]").evaluate_all("els => els.map(e => +e.dataset.person)") == [sue, DANA_C]
+
+
+@pytest.mark.parametrize("act", ["done", "snooze"])
+def test_on_a_phone_a_row_button_leaves_focus_on_the_page(env, page_as, act):
+    """On a phone the Done section starts closed, so the row's Undo is hidden after "Done, nothing to
+    log": focus goes to the next thing on show (the Done toggle), never to <body>. The same for "Not
+    this week" from the opened row."""
+    add_sue(env)
+    _, pg = page_as("/bd/", AVERY, PHONE)
+    wait_week(pg)
+    settled(pg)
+    row = node(pg, DANA)
+    row.locator('[data-act="toggle"]').click()
+    row.locator('.wk-co-foot [data-act="%s"]' % act).click()
+    pg.wait_for_selector('[data-task="%d"]:not([data-status="open"])' % DANA, state="attached", timeout=10000)
+    pg.wait_for_timeout(300)
+    assert focus_is_on_the_page(pg), "focus fell to <body> after %s at 390" % act
+
+
 def test_done_on_the_opened_row_closes_the_whole_company(env, page_as, expect):
     add_sue(env)
     _, pg = page_as("/bd/", AVERY)

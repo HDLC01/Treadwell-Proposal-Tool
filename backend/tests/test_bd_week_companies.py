@@ -358,6 +358,78 @@ def test_a_legacy_week_with_two_people_at_abc_is_one_row(world, bd_db, bd_as_use
     assert headline(get_week(rj)) == (1, 2, 0)
 
 
+def test_a_legacy_week_half_done_before_the_deploy_stays_done(world, bd_db, bd_as_user, bd_today, monkeypatch):
+    """RJ's Nov 30 list was built before #828 and he left Jim a voicemail on Monday morning, so Jim's
+    task is done and Sue's still open when #828 deploys. Under #828 the ABC row was closed by that
+    voicemail: it reads done, "1 of 2 done" does not go back to 0, and the row's buttons treat it as
+    done until it is reopened."""
+    bd_today(WEEK)
+    monkeypatch.setenv("BD_NOW", "2026-11-30T11:00:00-06:00")
+    batch, t = legacy_week(bd_db, world)
+    bd_db.execute("update bd.tasks set status = 'done', done_at = '2026-11-30T09:15:00-06:00' where id = %s",
+                  (t["jim"],))
+    rj = as_(bd_as_user, world, "rj")
+    w = get_week(rj)
+    assert row_of(w, world["co"]["abc"])["status"] == "done" and headline(w) == (1, 2, 0)
+    r = rj.post("/api/bd/tasks/%d/done" % t["sue"], json={})
+    assert (r.status_code, r.json()["message"]) == (409, "That task is already done.")
+    r = rj.post("/api/bd/tasks/%d/snooze" % t["sue"], json={})
+    assert (r.status_code, r.json()["message"]) == (409, "Only an open task can be skipped.")
+    assert statuses(bd_db, [t["jim"], t["sue"]]) == ["done", "open"]
+    assert rj.post("/api/bd/tasks/%d/reopen" % t["sue"], json={}).status_code == 200
+    assert statuses(bd_db, [t["jim"], t["sue"]]) == ["open", "open"]
+    assert headline(get_week(rj)) == (0, 2, 0)
+
+
+def test_a_merge_of_an_open_row_into_a_done_one_keeps_it_done(built, bd_db, bd_as_user, monkeypatch):
+    """#811's merge after #828: Pat's voicemail closed XYZ's row (1 of 3). An admin then merges ABC
+    (Jim's row, open) into XYZ. Both tasks sit on one XYZ row now, which stays done: 1 of 2, never 0."""
+    monkeypatch.setenv("BD_NOW", "2026-11-30T10:00:00-06:00")
+    co, p, t = built["co"], built["p"], built["t"]
+    rj = as_(bd_as_user, built, "rj")
+    assert rj.post("/api/bd/contacts/%d/interactions" % p["pat"], json={"kind": "voicemail"}).status_code == 200
+    assert headline(get_week(rj)) == (1, 3, 1)
+    r = as_(bd_as_user, built, "abe").post("/api/bd/contacts/accounts/%d/merge" % co["abc"],
+                                           json={"into": co["xyz"], "name_from": co["xyz"]})
+    assert r.status_code == 200, r.text
+    w = get_week(rj)
+    xyz = row_of(w, co["xyz"])
+    assert (xyz["status"], sorted(xyz["task_ids"])) == ("done", sorted([t["jim"], t["pat"]]))
+    assert headline(w) == (1, 2, 1)
+
+
+def test_a_follow_up_companys_never_reached_best_person_reads_the_companys_tries(world, bd_db):
+    """Sue (live talk Jun 1) then got a voicemail on Nov 10 and a call nobody answered on Nov 16: ABC
+    has 2 misses since its last live talk. Jim, ABC's best person, was never tried himself: the 40
+    points for never having a live talk are his own, the tries part (2 x 5) is the company's, and the
+    chip says what the row's misses line says, "2 tries since the last live talk", never "Never
+    reached after 2 tries" (#828's example). 40 + key 20 + 10 = 70. DEF (nobody there ever talked
+    live) still reads "Never reached after 2 tries"."""
+    p = world["p"]
+    mk_talk(bd_db, p["sue"], "voicemail", "2026-11-10T16:00:00Z", "voicemail", world["rj"])
+    mk_talk(bd_db, p["sue"], "call", "2026-11-16T16:00:00Z", "no_answer", world["rj"])
+    done = weekly.run_due(bd_db, now=FRIDAY_RUN)
+    batch = next(b["batch_id"] for b in done if b["owner_id"] == world["rj"])
+    rows = {r["contact_id"]: r for r in bd_db.execute(
+        "select contact_id, kind, score, reason, reasons from bd.tasks where batch_id = %s", (batch,)).fetchall()}
+    jim = rows[p["jim"]]
+    assert (jim["kind"], jim["score"]) == ("followup", 70)
+    assert jim["reasons"] == ["2 tries since the last live talk", "Key account"]
+    assert jim["reason"] == "2 tries since the last live talk. Key account."
+    assert rows[p["ann"]]["reasons"] == ["Never reached after 2 tries"]
+
+
+def test_a_due_maintenance_person_keeps_their_own_3_day_rest(world, bd_db):
+    """Maintenance stays as it was (#828 "Kept as they are"): the company's 3-day rest is for the BD
+    picks. Quinn at QRS got a voicemail on Wed Nov 25, two days before the batch; Rae there is still
+    due and gets her pinned follow-up, as before #828."""
+    p = world["p"]
+    mk_talk(bd_db, p["quinn"], "voicemail", "2026-11-25T16:00:00Z", "voicemail", world["rj"])
+    done = weekly.run_due(bd_db, now=FRIDAY_RUN)
+    batch = next(b["batch_id"] for b in done if b["owner_id"] == world["rj"])
+    assert [(c, k) for c, k, _s in tasks_of(bd_db, batch) if k == "maintenance"] == [(p["rae"], "maintenance")]
+
+
 def test_after_a_legacy_week_the_next_friday_batch_is_built_per_company(world, bd_db, bd_today):
     batch, _t = legacy_week(bd_db, world)
     bd_today("2026-12-04")
@@ -538,9 +610,10 @@ def test_not_the_right_person_keeps_the_row_open_while_someone_else_can_be_calle
     assert body["task"] == {"id": t["jim"], "status": "open", "done_at": None}
     assert body["contact"] == {"id": p["jim"], "confirmed": False, "notes": "Retired."}
     abc = row_of(get_week(rj), co["abc"])
-    assert abc["status"] == "open"
+    assert abc["status"] == "open" and abc["id"] == t["jim"]
+    # Sue, who can still be called, is now first: the row's Call and Next up's Call dial her, not Jim.
     assert [(x["name"], x["confirmed"], x["not_right_person"]) for x in abc["people"]] == [
-        ("Jim Ash", False, True), ("Sue Baird", True, False)]
+        ("Sue Baird", True, False), ("Jim Ash", False, True)]
     # Sue is not the right person either: nobody is left to call, so the row closes.
     r = rj.post("/api/bd/tasks/%d/not-right-person" % t["jim"], json={"contact_id": p["sue"]})
     assert r.status_code == 200 and r.json()["task"]["status"] == "done"

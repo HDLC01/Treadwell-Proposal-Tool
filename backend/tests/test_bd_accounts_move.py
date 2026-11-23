@@ -16,7 +16,7 @@ THE MAIN CASE, built by `tallgrass()`: a made-up company, Tallgrass Millwork, wi
 plus six made-up fillers, each at a dental office of its own with an open BD call on Avery's list, so
 her Friday list holds exactly 10 BD calls (302, 303, p1, p2 and the six), 2 of them done. Since #828
 This Week shows one row per company, and p1 and p2 are both at Tallgrass (a list built before #828
-could hold both): her headline counts 9 company rows, Tallgrass open while p1's call is.
+could hold both): her headline counts 9 company rows, Tallgrass done since p2's call is.
 A maintenance follow-up comes due 120 days after the last one, on day 120 itself (BD's rule).
 Everything is made up: example.com emails, 555-01xx phones.
 """
@@ -123,8 +123,9 @@ def test_making_a_company_maintenance_moves_every_person_and_nothing_else(bd_see
 def test_the_open_bd_calls_come_off_and_the_list_is_never_refilled(bd_seeded, bd_as_user, bd_db):
     t = tallgrass(bd_db)
     week_before = bd_as_user(AVERY).get("/api/bd/week").json()["week"]
-    # 9 rows: Tallgrass (p1 open, p2 done: open), 302, 303 (done) and the six; due: Hal's 301.
-    assert (week_before["done_count"], week_before["total"], week_before["due_count"]) == (1, 9, 1)
+    # 9 rows: Tallgrass (p2's call is done, so the row is done though p1's is open), 302, 303 (done)
+    # and the six; due: Hal's 301. The headline never drops on deploy: 2 done, as before #828.
+    assert (week_before["done_count"], week_before["total"], week_before["due_count"]) == (2, 9, 1)
     avery_calls, blair_calls = bd_calls(bd_db, AVERY), bd_calls(bd_db, BLAIR)
     move(bd_as_user(AVERY), t["company"], "maintenance")
     status = {r["id"]: r["status"] for r in bd_calls(bd_db, AVERY)}

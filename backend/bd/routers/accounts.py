@@ -100,11 +100,6 @@ SORTS = {
     "last_live_at": 'live.last_live_at desc nulls last, lower(btrim(co.name)) collate "C", co.id',
 }
 
-# A live talk BD counts, dated on or before today, with someone at company `co` who is not archived:
-# the same query This Week's company rows read (#828).
-_LIVE_AT_COMPANY = company_facts.LIVE_AT_COMPANY
-
-
 # ── the account list ─────────────────────────────────────────────────────────────────────────
 def _pick_owner(people: list, talks: dict, sellers: set) -> tuple:
     """(owner UserRef or None, other_owners) of one account's people (contacts_summary rows). Only
@@ -137,7 +132,7 @@ def _accounts(conn, category: str, sort: str, limit: int, offset: int) -> tuple:
         "with acc as (" + acc + ")"
         " select co.id, co.name, co.city, co.industry, acc.people, live.last_live_at"
         " from acc join companies co on co.id = acc.company_id"
-        " left join lateral (" + _LIVE_AT_COMPANY + ") live on true"
+        " left join lateral (" + company_facts.LIVE_AT_COMPANY + ") live on true"
         " order by " + SORTS[sort] + " limit %(limit)s offset %(offset)s", params).fetchall()
     ids = [r["id"] for r in rows]
     people: dict = {i: [] for i in ids}

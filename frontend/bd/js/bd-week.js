@@ -705,14 +705,14 @@
     var n = (r.people || []).length;
     var firstLine = [first.name, first.title].filter(Boolean).join(" · ") + (n > 1 ? " · +" + (n - 1) + " more" : "");
     var misses = missesWords(r);
-    var main = '<span class="wk-co-ico">' + icon("building", 18) + "</span>" +
-      '<span class="wk-co-main"><span class="wk-co-name">' + esc(companyName(r)) + "</span>" +
+    var main = BD.coIconHTML() +
+      '<span class="wk-co-main"><span class="wk-co-name bd-co-name">' + esc(companyName(r)) + "</span>" +
       '<span class="wk-co-first">' + esc(firstLine) + "</span>" +
       (misses ? '<span class="wk-co-misses">' + esc(misses) + "</span>" : "") + "</span>";
     var opened = !o.preview && !!S.open[r.id];
     var toggle = o.preview ? '<span class="wk-co-toggle is-static">' + main + "</span>"
       : '<button type="button" class="wk-co-toggle" data-act="toggle" id="wk-t-' + esc(r.id) + '" aria-expanded="' + opened +
-        '" aria-controls="wk-p-' + esc(r.id) + '">' + main + '<span class="wk-co-chev">' + icon("chev-right", 18) + "</span></button>";
+        '" aria-controls="wk-p-' + esc(r.id) + '">' + main + BD.coChevHTML() + "</button>";
     return '<li class="list-row wk-row wk-co' + (opened ? " is-open" : "") + (two ? " wk-row-two" : "") + (noPhone ? " wk-row-nophone" : "") +
       (S.canAct && !o.preview ? "" : " is-readonly") + '"' + hook + ">" +
       '<div class="wk-co-head">' + toggle +
@@ -1125,14 +1125,32 @@
     });
   }
 
-  /** Where focus goes when the call sheet closes after a save redrew the row it was opened from:
-   *  the row's Undo, else its Call, else the first Call on the page, else the heading. */
-  function callFocusTarget(r) {
+  /** The first of `sels` that is on show (a hidden Undo in the closed Done section on a phone is
+   *  not), else the next thing on show: Next up's Call, any Call, the Done toggle, the heading. */
+  function shownTarget(sels) {
     var shown = function (sel) {
       return Array.prototype.filter.call(document.querySelectorAll(sel), function (n) { return n.getClientRects().length > 0; })[0] || null;
     };
-    return shown('[data-task="' + r.id + '"] [data-act="reopen"]') || shown('[data-task="' + r.id + '"] [data-act="call"]') ||
-      shown('#wk-next [data-act="call"]') || shown('#lists [data-act="call"]') || shown(".wk-done-toggle") || $("main h1");
+    var all = sels.concat(['#wk-next [data-act="call"]', '#lists [data-act="call"]', ".wk-done-toggle"]);
+    for (var i = 0; i < all.length; i++) {
+      var n = shown(all[i]);
+      if (n) return n;
+    }
+    return $("main h1");
+  }
+
+  /** Focus the first of `sels` on show (shownTarget), so focus never drops to <body> after a redraw. */
+  function focusShown(sels) {
+    var n = shownTarget(sels);
+    if (!n) return;
+    if (n.tagName === "H1" && !n.hasAttribute("tabindex")) n.setAttribute("tabindex", "-1");
+    try { n.focus({ preventScroll: true }); } catch (e) { n.focus(); }
+  }
+
+  /** Where focus goes when the call sheet closes after a save redrew the row it was opened from:
+   *  the row's Undo, else its Call, else shownTarget's next thing on show. */
+  function callFocusTarget(r) {
+    return shownTarget(['[data-task="' + r.id + '"] [data-act="reopen"]', '[data-task="' + r.id + '"] [data-act="call"]']);
   }
 
   function onCallChange(r, c, ev) {
@@ -1173,7 +1191,7 @@
       if (!res) return;
       applyRow(r, res.task);
       renderAll();
-      focusLater('[data-task="' + r.id + '"] [data-act="reopen"]');
+      focusShown(['[data-task="' + r.id + '"] [data-act="reopen"]']);
       toast("Done. Nothing logged.", { action: { label: "Undo", onClick: function () { doReopen(r, null); } } });
       refreshAll(idsOf(r));
     });
@@ -1185,7 +1203,7 @@
       applyRow(r, res.task);
       S.offNow[r.id] = true;
       renderAll();
-      focusLater("#wk-next [data-act=\"call\"]");
+      focusShown([]);                               // Next up's Call, else the next thing on show
       toast("Taken off this week.", { action: { label: "Undo", onClick: function () { doReopen(r, null); } } });
       refreshAll(idsOf(r));
     });
@@ -1197,7 +1215,7 @@
       applyRow(r, res.task);
       delete S.offNow[r.id];
       renderAll();
-      focusLater('[data-task="' + r.id + '"] [data-act="call"]');
+      focusShown(['[data-task="' + r.id + '"] [data-act="call"]', '[data-task="' + r.id + '"] [data-act="toggle"]']);
       BD.announce(companyName(r) + " is back on the list.");
       refreshAll([]);
     });

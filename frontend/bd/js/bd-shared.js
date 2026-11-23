@@ -236,6 +236,12 @@
       esc(crm().initialsOf(name)) + mark + "</span>";
   }
 
+  /** A collapsible BD account row's building and chevron (Contacts #810, This Week #828), the same
+   *  look on both pages (bd.css .bd-co-ico / .bd-co-chev). Put both inside the row's toggle button:
+   *  its aria-expanded="true" draws them open. */
+  function coIconHTML() { return '<span class="bd-co-ico" aria-hidden="true">' + icon("building", 18) + "</span>"; }
+  function coChevHTML() { return '<span class="bd-co-chev" aria-hidden="true">' + icon("chev-right", 18) + "</span>"; }
+
   /** "Good morning" / "Good afternoon" / "Good evening" from the wall-clock hour of a Central ISO
    *  timestamp (pages pass BD.bizNowISO(); tests pass a fixed string). */
   function greeting(nowISO) {
@@ -737,7 +743,9 @@
    *  danger, sub}] (`sub`: an optional second, smaller line under the label; `href`: see safeHref). Choosing one dispatches a bubbling "bd-menu" CustomEvent {detail: {act, anchor}}
    *  on the anchor and closes the menu. When the page has redrawn the anchor away while the menu was
    *  open (a background refresh), the event goes to the document instead, still naming the old anchor,
-   *  so the choice is not lost. Arrow keys move, Escape closes, an outside click closes.
+   *  so the choice is not lost: a page that redraws its anchors while a menu can be open (This Week)
+   *  listens on the document and matches on detail.anchor; a page that does not (Contacts, the
+   *  contact page) may listen on a container. Arrow keys move, Escape closes, an outside click closes.
    *  On a phone it opens as a bottom action sheet. Opening the same anchor again closes it. */
   function menu(anchorBtn, items) {
     var again = openMenu && openMenu.anchor === anchorBtn;
@@ -1107,6 +1115,8 @@
     LABELS: LABELS,
     VERB: VERB,
     avatarHTML: avatarHTML,
+    coIconHTML: coIconHTML,
+    coChevHTML: coChevHTML,
     greeting: greeting,
     plural: plural,
     fmtCount: fmtCount,
