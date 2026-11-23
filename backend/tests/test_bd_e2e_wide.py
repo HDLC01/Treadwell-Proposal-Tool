@@ -79,7 +79,13 @@ def test_at_1920_the_page_fills_the_main_area(open_page, path, email, ready, con
 def test_at_1920_a_contacts_side_column_grows(open_page):
     """The extra width is used: the side column is wider than the 320px it is up to a laptop's width."""
     pg = open_page("/bd/contact.html?id=21", AVERY, WIDE, ".cd-layout .cd-side")
-    side = pg.locator(".cd-layout .cd-side").bounding_box()["width"]
+    # The page draws twice (the contact, then its history), so measure once the history is in and the
+    # side column is on screen, never mid-redraw (a None box failed CI once).
+    pg.locator(".cd-tl-when").first.wait_for(timeout=15000)
+    side = pg.wait_for_function(
+        """() => { const el = document.querySelector('.cd-layout .cd-side');
+                   const w = el ? el.getBoundingClientRect().width : 0; return w > 0 ? w : null; }""",
+        timeout=15000).json_value()
     assert side > 360, side
 
 
@@ -113,7 +119,10 @@ def test_at_1920_a_contacts_controls_and_history_keep_their_measure(open_page):
     width from the words they belong to."""
     pg = open_page("/bd/contact.html?id=21", AVERY, WIDE, ".cd-layout .cd-side")
     pg.locator(".cd-tl-when").first.wait_for(timeout=15000)
-    seg = pg.locator(".call-seg").first.bounding_box()["width"]
+    seg = pg.wait_for_function(
+        """() => { const el = document.querySelector('.call-seg');
+                   const w = el ? el.getBoundingClientRect().width : 0; return w > 0 ? w : null; }""",
+        timeout=15000).json_value()
     assert seg <= 520, "the follow-up choice is %dpx wide" % seg
     # The measure is 72 characters of the page's own font, so it is read from the page: 72ch is about
     # 540px in Windows fonts and 641px in CI's DejaVu Sans. The card itself is over 1300px wide here.
