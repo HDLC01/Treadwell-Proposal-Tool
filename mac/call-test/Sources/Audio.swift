@@ -26,12 +26,27 @@ final class LevelMeter {
     private var sumSquares: Double = 0
     private var secondsTotal = 0
     private var secondsWithSound = 0
+    private var lastFed = Date()
     /// Quieter than this for a whole second counts as silence.
     static let soundFloorDB: Float = -50
 
     func reset() {
         lock.lock(); defer { lock.unlock() }
         current = -120; loudest = -120; frames = 0; sumSquares = 0; secondsTotal = 0; secondsWithSound = 0
+        lastFed = Date()
+    }
+
+    /// After a restart: keep the counts, but don't call the recorder stalled before its first sound data.
+    func markAlive() {
+        lock.lock(); defer { lock.unlock() }
+        lastFed = Date()
+    }
+
+    /// Seconds since the recorder last handed over sound data. Both recorders get data many times a
+    /// second even when nobody talks, so a gap of seconds means the recorder has stopped.
+    var secondsSinceFeed: TimeInterval {
+        lock.lock(); defer { lock.unlock() }
+        return Date().timeIntervalSince(lastFed)
     }
 
     func feed(_ buffer: AVAudioPCMBuffer) {
@@ -55,6 +70,7 @@ final class LevelMeter {
         let db = rms > 0 ? Float(20 * log10(rms)) : -120
         let rate = buffer.format.sampleRate
         lock.lock()
+        lastFed = Date()
         current = db
         loudest = max(loudest, db)
         sumSquares += sum
@@ -108,14 +124,33 @@ private func uint32Property(_ object: AudioObjectID, _ selector: AudioObjectProp
     return value
 }
 
-private func defaultOutputDevice() throws -> AudioObjectID {
-    var addr = address(kAudioHardwarePropertyDefaultSystemOutputDevice)
+/// The device the Mac plays (or records) through right now. Output uses the main output setting,
+/// which is where call audio goes, not the separate one for alert sounds.
+private func defaultDevice(input: Bool) throws -> AudioObjectID {
+    var addr = address(input ? kAudioHardwarePropertyDefaultInputDevice : kAudioHardwarePropertyDefaultOutputDevice)
     var size = UInt32(MemoryLayout<AudioObjectID>.size)
     var device = AudioObjectID(kAudioObjectUnknown)
     let status = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &device)
-    guard status == noErr else { throw AudioError(step: "find the Mac's speakers", status: status) }
+    guard status == noErr, device != kAudioObjectUnknown else {
+        throw AudioError(step: input ? "find the microphone" : "find the Mac's speakers", status: status)
+    }
     return device
 }
+
+private func nominalRate(_ device: AudioObjectID) -> Float64? {
+    var addr = address(kAudioDevicePropertyNominalSampleRate)
+    var size = UInt32(MemoryLayout<Float64>.size)
+    var value: Float64 = 0
+    guard AudioObjectGetPropertyData(device, &addr, 0, nil, &size, &value) == noErr else { return nil }
+    return value
+}
+
+private func deviceName(_ device: AudioObjectID) -> String {
+    stringProperty(device, kAudioObjectPropertyName) ?? "unknown"
+}
+
+/// How long a recorder may go without sound data before it counts as stopped.
+private let stalledAfter: TimeInterval = 2
 
 final class SystemAudioTap {
     let meter = LevelMeter()
@@ -126,9 +161,14 @@ final class SystemAudioTap {
     private var file: AVAudioFile?
     private let queue = DispatchQueue(label: "treadwell.calltest.tap", qos: .userInitiated)
     private(set) var outputName = ""
+    private var outputID = AudioObjectID(kAudioObjectUnknown)
+    private var outputRate: Float64 = 0
 
-    func start(writingTo url: URL?) throws {
-        meter.reset()
+    var isRunning: Bool { aggregateID != kAudioObjectUnknown }
+
+    /// `resetMeter: false` is a restart in the middle of a test call: the seconds counts carry on.
+    func start(writingTo url: URL?, resetMeter: Bool = true) throws {
+        if resetMeter { meter.reset() } else { meter.markAlive() }
         let description = CATapDescription(stereoGlobalTapButExcludeProcesses: [])
         description.uuid = UUID()
         description.name = "Treadwell call test"
@@ -147,8 +187,11 @@ final class SystemAudioTap {
         }
         format = fmt
 
-        let output = try defaultOutputDevice()
-        outputName = stringProperty(output, kAudioObjectPropertyName) ?? "unknown"
+        let output: AudioObjectID
+        do { output = try defaultDevice(input: false) } catch { stop(); throw error }
+        outputID = output
+        outputRate = nominalRate(output) ?? 0
+        outputName = deviceName(output)
         guard let outputUID = stringProperty(output, kAudioDevicePropertyDeviceUID) else {
             stop(); throw AudioError(step: "read the speakers' id", status: -1)
         }
@@ -167,8 +210,10 @@ final class SystemAudioTap {
         guard status == noErr else { stop(); throw AudioError(step: "set up the recording device", status: status) }
 
         if let url {
-            file = try AVAudioFile(forWriting: url, settings: aacSettings(fmt),
-                                   commonFormat: fmt.commonFormat, interleaved: fmt.isInterleaved)
+            do {
+                file = try AVAudioFile(forWriting: url, settings: aacSettings(fmt),
+                                       commonFormat: fmt.commonFormat, interleaved: fmt.isInterleaved)
+            } catch { stop(); throw error }
         }
         status = AudioDeviceCreateIOProcIDWithBlock(&procID, aggregateID, queue) { [weak self] _, input, _, _, _ in
             guard let self, let fmt = self.format,
@@ -196,37 +241,81 @@ final class SystemAudioTap {
         aggregateID = AudioObjectID(kAudioObjectUnknown)
         tapID = AudioObjectID(kAudioObjectUnknown)
     }
+
+    /// Why this recorder needs a restart, or nil when it's fine. A call switches AirPods into call
+    /// mode (a new sample rate) or moves the sound to another device; either can stop the recording
+    /// device this recorder built at Start.
+    func problem() -> String? {
+        guard isRunning else { return nil }
+        if let now = try? defaultDevice(input: false), now != outputID {
+            return "the sound moved from \(outputName) to \(deviceName(now))"
+        }
+        if outputRate > 0, let rate = nominalRate(outputID), rate != outputRate {
+            return "\(outputName) changed from \(Int(outputRate)) Hz to \(Int(rate)) Hz"
+        }
+        let gap = meter.secondsSinceFeed
+        if gap > stalledAfter { return "no sound data for \(Int(gap)) s" }
+        return nil
+    }
 }
 
 final class MicRecorder {
     let meter = LevelMeter()
     private var engine = AVAudioEngine()
+    private let fileLock = NSLock()
     private var file: AVAudioFile?
+    private var inputID = AudioObjectID(kAudioObjectUnknown)
     private(set) var inputName = ""
+    private(set) var channels = 0
+    private(set) var isRunning = false
 
-    func start(writingTo url: URL?) throws {
-        meter.reset()
+    /// `resetMeter: false` is a restart in the middle of a test call: the seconds counts carry on.
+    func start(writingTo url: URL?, resetMeter: Bool = true) throws {
+        if resetMeter { meter.reset() } else { meter.markAlive() }
         engine = AVAudioEngine()
         let input = engine.inputNode
         let fmt = input.outputFormat(forBus: 0)
         guard fmt.sampleRate > 0 else { throw AudioError(step: "find a microphone", status: -1) }
-        inputName = AVCaptureDevice.default(for: .audio)?.localizedName ?? "unknown"
+        inputID = (try? defaultDevice(input: true)) ?? AudioObjectID(kAudioObjectUnknown)
+        inputName = inputID != kAudioObjectUnknown ? deviceName(inputID)
+            : (AVCaptureDevice.default(for: .audio)?.localizedName ?? "unknown")
+        channels = Int(fmt.channelCount)
+        var newFile: AVAudioFile?
         if let url {
-            file = try AVAudioFile(forWriting: url, settings: aacSettings(fmt),
-                                   commonFormat: fmt.commonFormat, interleaved: fmt.isInterleaved)
+            newFile = try AVAudioFile(forWriting: url, settings: aacSettings(fmt),
+                                      commonFormat: fmt.commonFormat, interleaved: fmt.isInterleaved)
         }
+        fileLock.lock(); file = newFile; fileLock.unlock()
         input.installTap(onBus: 0, bufferSize: 4096, format: fmt) { [weak self] buffer, _ in
-            self?.meter.feed(buffer)
-            try? self?.file?.write(from: buffer)
+            guard let self else { return }
+            self.meter.feed(buffer)
+            self.fileLock.lock()
+            try? self.file?.write(from: buffer)
+            self.fileLock.unlock()
         }
         engine.prepare()
-        try engine.start()
+        do { try engine.start() } catch { stop(); throw error }
+        isRunning = true
     }
 
     func stop() {
+        isRunning = false
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
-        file = nil
+        fileLock.lock(); file = nil; fileLock.unlock()
+    }
+
+    /// Why this recorder needs a restart, or nil when it's fine. The recorder stops by itself when
+    /// the Mac's audio setup changes, for example when AirPods switch into call mode.
+    func problem() -> String? {
+        guard isRunning else { return nil }
+        if !engine.isRunning { return "the microphone recorder stopped (the audio setup changed)" }
+        if let now = try? defaultDevice(input: true), inputID != kAudioObjectUnknown, now != inputID {
+            return "the microphone moved from \(inputName) to \(deviceName(now))"
+        }
+        let gap = meter.secondsSinceFeed
+        if gap > stalledAfter { return "no sound data for \(Int(gap)) s" }
+        return nil
     }
 }
 

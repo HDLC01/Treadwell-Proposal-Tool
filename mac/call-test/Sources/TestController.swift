@@ -36,6 +36,14 @@ final class TestController: ObservableObject {
     private var watchTimer: Timer?
     private var lastProcesses: Set<AudioProcess> = []
     private var log: FileHandle?
+    /// Each recorder restart during a call writes a new numbered part, so nothing recorded is lost.
+    private var themPart = 1
+    private var youPart = 1
+    /// A restart that failed is tried again every second; only its first failure is logged.
+    private var themDown = false
+    private var youDown = false
+    /// A recorder that keeps stopping gives up after this many parts; the log shows each restart.
+    private let maxParts = 20
 
     let folder: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -102,14 +110,17 @@ final class TestController: ObservableObject {
 
     func start(_ id: Int) {
         guard let i = runs.firstIndex(where: { $0.id == id }), !anyRunning else { return }
-        let them = folder.appendingPathComponent("test\(id)-them.m4a")
-        let you = folder.appendingPathComponent("test\(id)-you.m4a")
-        try? FileManager.default.removeItem(at: them)
-        try? FileManager.default.removeItem(at: you)
+        // "Do it again" replaces every file from the earlier try, restart parts included.
+        if let names = try? FileManager.default.contentsOfDirectory(atPath: folder.path) {
+            for name in names where name.hasPrefix("test\(id)-") {
+                try? FileManager.default.removeItem(at: folder.appendingPathComponent(name))
+            }
+        }
+        themPart = 1; youPart = 1; themDown = false; youDown = false
         runs[i].error = nil
         do {
-            try tap.start(writingTo: them)
-            try micRecorder.start(writingTo: you)
+            try tap.start(writingTo: partFile(id, "them", 1))
+            try micRecorder.start(writingTo: partFile(id, "you", 1))
         } catch {
             tap.stop(); micRecorder.stop()
             runs[i].error = "Couldn't start: \(error)"
@@ -119,14 +130,54 @@ final class TestController: ObservableObject {
         runs[i].running = true
         runs[i].started = Date()
         runs[i].seconds = 0
-        write("Test \(id) started. Speakers/headset: \(tap.outputName). Microphone: \(micRecorder.inputName)")
+        write("Test \(id) started. Speakers/headset: \(tap.outputName). Microphone: \(micRecorder.inputName) (\(micRecorder.channels) channel(s))")
         lastProcesses = []
         logProcesses()
         meterTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { _ in
             Task { @MainActor in self.tick() }
         }
         watchTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-            Task { @MainActor in self.logProcesses() }
+            Task { @MainActor in
+                self.logProcesses()
+                self.keepRecordersGoing()
+            }
+        }
+    }
+
+    private func partFile(_ id: Int, _ who: String, _ part: Int) -> URL {
+        folder.appendingPathComponent(part == 1 ? "test\(id)-\(who).m4a" : "test\(id)-\(who)-part\(part).m4a")
+    }
+
+    /// Restarts a recorder that stopped mid-call, into the next numbered part, and logs why.
+    private func keepRecordersGoing() {
+        guard let id = runs.first(where: { $0.running })?.id else { return }
+
+        let themWhy = themDown ? "the last restart failed" : tap.problem()
+        if let why = themWhy, themPart < maxParts {
+            tap.stop()
+            if !themDown { themPart += 1 }
+            do {
+                try tap.start(writingTo: partFile(id, "them", themPart), resetMeter: false)
+                themDown = false
+                write("Test \(id): other person's recorder restarted as part \(themPart) because \(why). Now on \(tap.outputName).")
+            } catch {
+                if !themDown { write("Test \(id): other person's recorder couldn't restart after \(why): \(error). Trying every second.") }
+                themDown = true
+            }
+        }
+
+        let youWhy = youDown ? "the last restart failed" : micRecorder.problem()
+        if let why = youWhy, youPart < maxParts {
+            micRecorder.stop()
+            if !youDown { youPart += 1 }
+            do {
+                try micRecorder.start(writingTo: partFile(id, "you", youPart), resetMeter: false)
+                youDown = false
+                write("Test \(id): your recorder restarted as part \(youPart) because \(why). Now on \(micRecorder.inputName) (\(micRecorder.channels) channel(s)).")
+            } catch {
+                if !youDown { write("Test \(id): your recorder couldn't restart after \(why): \(error). Trying every second.") }
+                youDown = true
+            }
         }
     }
 
@@ -139,7 +190,7 @@ final class TestController: ObservableObject {
         runs[i].you = micRecorder.meter.summary
         themLevel = -120; youLevel = -120
         let t = runs[i].them!, y = runs[i].you!
-        write("Test \(id) stopped after \(runs[i].seconds) s. Other person: sound in \(t.withSound) of \(t.total) s. You: sound in \(y.withSound) of \(y.total) s.")
+        write("Test \(id) stopped after \(runs[i].seconds) s. Other person: sound in \(t.withSound) of \(t.total) s, \(themPart) part(s). You: sound in \(y.withSound) of \(y.total) s, \(youPart) part(s).")
     }
 
     private func tick() {
