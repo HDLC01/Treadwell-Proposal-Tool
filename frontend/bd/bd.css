@@ -644,7 +644,7 @@
 .bd-app .wk-next-name a:hover { color: var(--bd-ink); text-decoration: underline; text-underline-offset: 3px; }
 .bd-app .wk-next-open { margin-top: auto; align-self: flex-start; font-size: 13px; }
 .bd-app .wk-next-name { font-size: 17px; font-weight: 700; line-height: 1.3; color: var(--bd-ink); overflow-wrap: anywhere; }
-.bd-app .wk-next-meta { margin-top: 2px; font-size: 13px; line-height: 1.45; color: var(--bd-ink-2); }
+.bd-app .wk-next-meta { margin-top: 2px; font-size: 13px; line-height: 1.45; color: var(--bd-ink-2); overflow-wrap: anywhere; }
 .bd-app .wk-meta-narrow { display: none; }
 .bd-app .wk-meta-narrow > span { display: block; }
 .bd-app .wk-next-reason { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 14px; font-weight: 500; color: var(--bd-ink); }
@@ -655,7 +655,7 @@
 .bd-app .wk-call { white-space: nowrap; }
 .bd-app .wk-next-phone { margin-top: 12px; font-size: 15px; font-weight: 600; color: var(--bd-ink); }
 .bd-app .wk-next-side { display: none; flex-direction: column; gap: 4px; min-width: 0; padding-left: 16px; border-left: 1px solid var(--bd-line); font-size: 13px; }
-.bd-app .wk-next-label2 { font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--bd-ink-2); }
+.bd-app .wk-next-label2 { font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--bd-ink-2); overflow-wrap: anywhere; }
 .bd-app .wk-next-when { font-size: 13px; font-weight: 600; color: var(--bd-ink); }
 .bd-app .wk-next-sum { margin-top: 4px; font-size: 13px; color: var(--bd-ink-2); }
 .bd-app .wk-next-fact { margin-top: 2px; font-size: 13px; color: var(--bd-ink-2); overflow-wrap: anywhere; }

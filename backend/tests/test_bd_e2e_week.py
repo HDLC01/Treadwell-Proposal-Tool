@@ -1263,6 +1263,41 @@ def test_company_rows_fit_a_phone_with_a_long_name(env, page_as, expect, viewpor
             assert b["x"] + b["width"] <= card["x"] + card["width"] + 0.5, (sel, b)
 
 
+
+ONE_WORD = "Northwesternconstructionmanagementservices"   # one 42-letter word: nothing to break at
+
+
+@pytest.mark.parametrize("viewport", [PHONE, {"width": 320, "height": 700}], ids=["390", "320"])
+def test_the_next_up_card_fits_a_phone_with_a_one_word_company_name(env, page_as, expect, viewport):
+    """The Next up card names its company twice on a phone: under the person, and as "Also at <company>"
+    over the others there. A company name that is one long word must wrap inside the card: every line
+    of text in it ends at or before the card's right edge, and nothing scrolls sideways."""
+    run_sql(env[1], "update companies set name = %s where id = %s", (ONE_WORD, KAW))
+    _, pg = page_as("/bd/", AVERY, viewport)
+    wait_week(pg)
+    pg.locator("#ten-more-btn").click()
+    expect(toasts(pg)).to_contain_text("added below.")
+    expect(pg.locator('#wk-next [data-person="%d"]' % NORA_C)).to_have_count(1)
+    expect(pg.locator("#wk-next .wk-meta-narrow")).to_contain_text(ONE_WORD)
+    expect(pg.locator("#wk-next .wk-next-also .wk-next-label2")).to_contain_text(ONE_WORD)
+    settled(pg)
+    assert sideways(pg) <= 1, "the page scrolls sideways at %d" % viewport["width"]
+    over = pg.evaluate("""() => {
+      const card = document.querySelector('#wk-next .wk-next').getBoundingClientRect();
+      const walk = document.createTreeWalker(document.getElementById('wk-next'), NodeFilter.SHOW_TEXT);
+      const out = [];
+      for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+        if (!n.textContent.trim() || !n.parentElement.offsetParent) continue;
+        const r = document.createRange();
+        r.selectNodeContents(n);
+        for (const b of r.getClientRects()) {
+          if (b.width && b.right > card.right + 0.5) out.push([n.parentElement.className, n.textContent.trim(), b.right, card.right]);
+        }
+      }
+      return out;
+    }""")
+    assert not over, "text runs past the Next up card at %d: %r" % (viewport["width"], over)
+
 # ── the Weekly 10 is ten companies (#828, the browser half) ─────────────────────────────────────
 # Worked from the seed by hand. Prairie Ridge Builders LLC (company 10): Dana's live talk Oct 20 (101,
 # answered), then her voicemail Nov 2 (102): 1 miss since the last live talk, and a try two days
