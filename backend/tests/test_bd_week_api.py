@@ -232,7 +232,8 @@ def test_before_the_first_batch_the_week_is_empty(team, bd_as_user, bd_db):
     assert week["weekly_meetings"] == {"count": 0, "goal": 5, "non_dsbc_website": 0, "min": 1}
     assert week["touches_this_week"] == 0
     assert week["due_count"] == 0
-    assert set(week) == {"week_start", "week_end", "owner", "batch", "batches", "tasks", "done_count",
+    assert week["rows"] == []
+    assert set(week) == {"week_start", "week_end", "owner", "batch", "batches", "tasks", "rows", "done_count",
                          "total", "due_count", "pace", "weekly_meetings", "touches_this_week"}
 
 

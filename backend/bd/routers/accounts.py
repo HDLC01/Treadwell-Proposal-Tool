@@ -69,7 +69,7 @@ from typing import Any
 
 from fastapi import Body, Depends, Path, Request
 
-from .. import appsettings, auth, bizdate, db, errors, paging, serialize, web, weekly
+from .. import appsettings, auth, bizdate, company_facts, db, errors, paging, serialize, web, weekly
 from ..contacts_service import COMPANY_NOT_FOUND, FIX, default_frequency, lock_companies, too_long
 from ..events import log_event
 from ..normalize import normalize_company
@@ -100,11 +100,9 @@ SORTS = {
     "last_live_at": 'live.last_live_at desc nulls last, lower(btrim(co.name)) collate "C", co.id',
 }
 
-# A live talk BD counts, dated on or before today, with someone at company `co` who is not archived.
-_LIVE_AT_COMPANY = (
-    "select max(i.occurred_at) as last_live_at from contacts c2 join interactions i on i.contact_id = c2.id"
-    " where c2.company_id = co.id and c2.archived_at is null and i.counts_as_touch"
-    " and bd_date(i.occurred_at) <= bd_today()")
+# A live talk BD counts, dated on or before today, with someone at company `co` who is not archived:
+# the same query This Week's company rows read (#828).
+_LIVE_AT_COMPANY = company_facts.LIVE_AT_COMPANY
 
 
 # ── the account list ─────────────────────────────────────────────────────────────────────────

@@ -13,8 +13,10 @@ THE MAIN CASE, built by `tallgrass()`: a made-up company, Tallgrass Millwork, wi
     p3  Blair's, an open BD call on his list, never followed up                       due
     p4  Avery's, not on any list, an answered call Jun 7 (150 days ago)               due
     p5  Avery's, not on any list, a voicemail Aug 1 (95 days ago)                      not due
-plus six made-up fillers at Juniper Hollow Dental, each with an open BD call on Avery's list, so her
-Friday list holds exactly 10 BD calls (302, 303, p1, p2 and the six), 2 of them done.
+plus six made-up fillers, each at a dental office of its own with an open BD call on Avery's list, so
+her Friday list holds exactly 10 BD calls (302, 303, p1, p2 and the six), 2 of them done. Since #828
+This Week shows one row per company, and p1 and p2 are both at Tallgrass (a list built before #828
+could hold both): her headline counts 9 company rows, Tallgrass open while p1's call is.
 A maintenance follow-up comes due 120 days after the last one, on day 120 itself (BD's rule).
 Everything is made up: example.com emails, 555-01xx phones.
 """
@@ -71,8 +73,8 @@ def tallgrass(db):
     t["t1"] = task(db, AVERYS_LIST, t["p1"])
     t["t2"] = task(db, AVERYS_LIST, t["p2"], kind="new", status="done")
     t["t3"] = task(db, BLAIRS_LIST, t["p3"], kind="new")
-    juniper = company(db, "Juniper Hollow Dental")
-    t["fillers"] = [task(db, AVERYS_LIST, person(db, juniper, "Filler %d Quint" % n, AVERY), kind="new")
+    t["fillers"] = [task(db, AVERYS_LIST, person(db, company(db, "Juniper Hollow Dental %d" % n),
+                                                  "Filler %d Quint" % n, AVERY), kind="new")
                     for n in range(6)]
     return t
 
@@ -121,7 +123,8 @@ def test_making_a_company_maintenance_moves_every_person_and_nothing_else(bd_see
 def test_the_open_bd_calls_come_off_and_the_list_is_never_refilled(bd_seeded, bd_as_user, bd_db):
     t = tallgrass(bd_db)
     week_before = bd_as_user(AVERY).get("/api/bd/week").json()["week"]
-    assert (week_before["done_count"], week_before["total"], week_before["due_count"]) == (2, 10, 1)
+    # 9 rows: Tallgrass (p1 open, p2 done: open), 302, 303 (done) and the six; due: Hal's 301.
+    assert (week_before["done_count"], week_before["total"], week_before["due_count"]) == (1, 9, 1)
     avery_calls, blair_calls = bd_calls(bd_db, AVERY), bd_calls(bd_db, BLAIR)
     move(bd_as_user(AVERY), t["company"], "maintenance")
     status = {r["id"]: r["status"] for r in bd_calls(bd_db, AVERY)}
@@ -137,7 +140,8 @@ def test_the_open_bd_calls_come_off_and_the_list_is_never_refilled(bd_seeded, bd
                                   (t["t1"],)).fetchone()["d"]
     assert snoozed_until == NEXT_MONDAY
     week = bd_as_user(AVERY).get("/api/bd/week").json()["week"]
-    assert (week["done_count"], week["total"]) == (2, 10)        # logged calls still count; no refill
+    # Logged calls still count, no refill: p1's call is off and p2's is done, so Tallgrass is done.
+    assert (week["done_count"], week["total"]) == (2, 9)
 
 
 @pytest.mark.parametrize("p2_status", ["open", "done"])
@@ -181,7 +185,8 @@ def test_a_due_person_gets_the_pinned_follow_up_at_once(bd_seeded, bd_as_user, b
     assert by_person[t["p1"]]["reasons"][0] == "Follow-up was due Sun, Aug 16"         # Apr 18 + 120
     assert by_person[t["p3"]]["reasons"][0] == "No follow-up logged yet"
     week = bd_as_user(AVERY).get("/api/bd/week").json()["week"]
-    assert week["due_count"] == 3 and (week["done_count"], week["total"]) == (2, 10)   # Hal's 301, p1, p4
+    # Due now is per company (#828): Kaw Valley (Hal's 301) and Tallgrass (p1, p4).
+    assert week["due_count"] == 2 and (week["done_count"], week["total"]) == (2, 9)
     blair = bd_as_user(BLAIR).get("/api/bd/week").json()["week"]
     assert blair["due_count"] == 1
     # A pinned follow-up cannot be taken off by hand while the person is due.

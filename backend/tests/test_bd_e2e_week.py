@@ -483,9 +483,10 @@ def test_give_me_ten_more_adds_the_rest_and_never_moves_the_10(page_as, expect):
     names = sorted(t.strip() for t in extra.locator(".who-name").all_inner_texts())
     assert names == ["Lena Ortiz", "Marisa Cole"], names
     # Nora Lindqvist, a second due maintenance follow-up, sits under "Due now", not in the extra 10.
+    # She is at Kaw Valley with Hal, and "Due now" counts companies (#828): still 1.
     expect(pg.locator("#wk-due")).to_contain_text("Nora Lindqvist")
     s = summary(pg)
-    assert "1 of 2 done" in s and "Due now: 2 maintenance follow-ups" in s, s
+    assert "1 of 2 done" in s and "Due now: 1 maintenance follow-up" in s, s
     pg.locator("#ten-more-btn").click()
     expect(pg.locator(".wk-ten-msg")).to_have_text("Everyone on your list is already covered this week.")
 
@@ -714,7 +715,8 @@ def test_a_maintenance_task_cannot_be_taken_off_even_when_forced(page_as, expect
     _, pg = page_as("/bd/", AVERY)
     wait_week(pg)
     pg.locator("#ten-more-btn").click()
-    expect(pg.locator("#wk-due-line")).to_have_text("Due now: 2 maintenance follow-ups")
+    expect(pg.locator("#wk-due")).to_contain_text("Nora Lindqvist")
+    expect(pg.locator("#wk-due-line")).to_have_text("Due now: 1 maintenance follow-up")    # Kaw Valley (#828)
     nora = [t["id"] for t in week_json(pg)["tasks"] if t["contact"]["id"] == NORA_C]
     assert len(nora) == 1
     for act in ("snooze", "done"):
@@ -722,7 +724,7 @@ def test_a_maintenance_task_cannot_be_taken_off_even_when_forced(page_as, expect
         assert r == {"status": 409, "message": STAYS_409}, (act, r)
     w = week_json(pg)
     assert [t["status"] for t in w["tasks"] if t["id"] == nora[0]] == ["open"]
-    assert (w["due_count"], w["done_count"]) == (2, 1)
+    assert (w["due_count"], w["done_count"]) == (1, 1)        # one company: Kaw Valley (#828)
     reload_week(pg)
     expect(pg.locator('#wk-due [data-task="%d"][data-status="open"]' % nora[0])).to_have_count(1)
     assert post_status(pg, "/api/bd/tasks/%d/done" % DANA) == {"ok": True}, "a BD task still closes"
@@ -848,7 +850,7 @@ def test_give_me_10_more_never_puts_a_pinned_task_in_the_extra_ten(page_as, expe
     assert [t["contact"]["id"] for t in pinned] == [NORA_C]
     assert pg.locator("#wk-due [data-task]").evaluate_all("els => els.map(e => e.dataset.task)") == [str(pinned[0]["id"])]
     assert pg.locator('.wk-extra [data-task="%d"]' % pinned[0]["id"]).count() == 0
-    expect(pg.locator("#wk-due-line")).to_have_text("Due now: 2 maintenance follow-ups")
+    expect(pg.locator("#wk-due-line")).to_have_text("Due now: 1 maintenance follow-up")    # Kaw Valley (#828)
     pills = visible_pills(node(pg, pinned[0]["id"]))
     assert MAINT_PILL in pills and "Maintenance" not in pills, pills
     assert_no_take_off(pg, node(pg, pinned[0]["id"]), "the extra ten's pinned task")

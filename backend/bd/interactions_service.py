@@ -20,8 +20,10 @@ What "recompute" means here
     transaction:
       * a touch on or after promised_date clears it; one on or after next_step_date clears
         next_step and next_step_date (the mock does both);
-      * a call (any outcome), voicemail, meeting or hosted event marks this week's new/followup
-        task for the contact done (a note, email or text never does: they are not touches);
+      * a call (any outcome), voicemail, meeting or hosted event closes the company's row on this
+        week's lists (#828): every open new/followup task this week of anyone at the contact's
+        company is marked done, so a second call to someone else there the same week moves nothing
+        (company_facts.ROW_CLOSE_KINDS; a note, email or text never does: they are not touches);
       * a call, voicemail, meeting, hosted event, email or text closes the contact's open
         MAINTENANCE tasks on this week's list OR A LATER WEEK'S (the Friday build already made
         next week's) once that leaves the contact no longer due (settle_maintenance_tasks): the
@@ -40,14 +42,15 @@ from __future__ import annotations
 import datetime as _dt
 import re
 
-from . import bizdate, serialize
+from . import bizdate, company_facts, serialize
 from .events import actor_id
 
 KINDS = ("call", "voicemail", "meeting", "email", "sms", "note", "hosted")
 CALL_OUTCOMES = ("answered", "no_answer", "meeting_set")
 DIRECTIONS = ("in", "out")
 NO_DIRECTION_KINDS = ("meeting", "hosted", "note")
-# The work of a weekly task: these close it and get a suggested next step.
+# The work of a weekly task: these get a suggested next step, and close the company's row
+# (company_facts.ROW_CLOSE_KINDS is the one place that says which close it).
 TASK_KINDS = ("call", "voicemail", "meeting", "hosted")
 # A maintenance task closes on any logged follow-up: everything but a note (api.js closesTask).
 MAINTENANCE_CLOSE_KINDS = tuple(k for k in KINDS if k != "note")
@@ -76,8 +79,9 @@ def is_touch(kind, outcome) -> bool:
 
 
 def is_missed(kind, outcome) -> bool:
-    """A voicemail or a no-answer call: the "Send follow-up" card's attempts."""
-    return kind == "voicemail" or (kind == "call" and outcome == "no_answer")
+    """A voicemail or a no-answer call: the "Send follow-up" card's attempts, and a company's misses
+    (#828: company_facts.is_miss is the one rule)."""
+    return company_facts.is_miss(kind, outcome)
 
 
 def normalize_kind(kind, outcome):
@@ -213,23 +217,35 @@ def current_task(conn, contact_id, today=None):
 
 def closes_task(task_kind, interaction_kind) -> bool:
     """Whether logging an interaction of `interaction_kind` closes a task of `task_kind`: a
-    maintenance task on anything but a note, a new/followup task on TASK_KINDS."""
+    maintenance task on anything but a note, a new/followup task (a company's row) on
+    company_facts.ROW_CLOSE_KINDS."""
     if task_kind == "maintenance":
         return interaction_kind in MAINTENANCE_CLOSE_KINDS
-    return interaction_kind in TASK_KINDS
+    return interaction_kind in company_facts.ROW_CLOSE_KINDS
 
 
 def close_current_task(conn, contact_id, done_at, kind, today=None):
-    """Mark this week's new/followup task for the contact done when it is open AND an interaction
-    of `kind` closes it (closes_task). Returns the updated tasks row, or None when there was no
-    open task to close. A maintenance task is not closed here but by settle_maintenance_tasks:
-    it leaves the list when the contact stops being due, not merely because something was logged."""
-    t = current_task(conn, contact_id, today)
-    if t is None or t["status"] != "open" or t["kind"] == "maintenance" or not closes_task(t["kind"], kind):
+    """Close the company's row (#828): mark done every OPEN new/followup task on this week's lists
+    (any batch, any owner) of anyone at the contact's company, when an interaction of `kind` closes
+    it (closes_task). Returns the contact's own closed task (the latest: from the latest batch, as
+    current_task picks), else the first one closed, or None when nothing was open: a second call to
+    someone else there the same week closes nothing more. A maintenance task is not closed here but by settle_maintenance_tasks: it leaves
+    the list when the contact stops being due, not merely because something was logged."""
+    if not closes_task("followup", kind):
         return None
-    return conn.execute(
-        "update tasks set status = 'done', done_at = %s where id = %s and status = 'open' returning *",
-        (done_at, t["id"])).fetchone()
+    ws = bizdate.week_start(today or bizdate.today_central())
+    rows = conn.execute(
+        "update tasks t set status = 'done', done_at = %(at)s from task_batches b, contacts c"
+        " where b.id = t.batch_id and c.id = t.contact_id and b.week_start = %(ws)s and t.status = 'open'"
+        " and t.kind <> 'maintenance'"
+        " and c.company_id = (select company_id from contacts where id = %(cid)s) returning t.*",
+        {"at": done_at, "ws": ws, "cid": contact_id}).fetchall()
+    if not rows:
+        return None
+    own = [r for r in rows if r["contact_id"] == contact_id]
+    if own:
+        return max(own, key=lambda r: (r["batch_id"], r["id"]))
+    return min(rows, key=lambda r: r["id"])
 
 
 def settle_maintenance_tasks(conn, contact_id, done_at, kind, today=None) -> list:

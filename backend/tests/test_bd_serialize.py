@@ -131,6 +131,18 @@ BATCH_SPEC = {"id": is_int, "kind": is_str, "owner": is_dict, "week_start": is_d
 TASK_SPEC = {"id": is_int, "batch_id": is_int, "contact": opt(is_dict), "kind": is_str, "reason": is_str,
              "reasons": is_str_list, "score": is_int, "status": is_str, "done_at": opt(is_ts),
              "snoozed_until": opt(is_date)}
+WEEK_ROW_PERSON_SPEC = {
+    "id": is_int, "name": is_str, "title": opt(is_str), "phone": opt(is_str), "phone_e164": opt(is_str),
+    "email": opt(is_str), "confirmed": is_bool, "last_live_at": opt(is_ts), "attempts_since_live": is_int,
+    "promised_date": opt(is_date), "next_step": opt(is_str), "next_step_date": opt(is_date),
+    "task_id": opt(is_int), "not_right_person": is_bool,
+}
+WEEK_ROW_SPEC = {
+    "id": is_int, "section": is_str, "batch_id": is_int, "task_ids": lambda v: type(v) is list and all(map(is_int, v)),
+    "kind": is_str, "status": is_str, "done_at": opt(is_ts), "snoozed_until": opt(is_date), "reason": is_str,
+    "reasons": is_str_list, "score": is_int, "company": is_dict, "misses": is_int, "last_live_at": opt(is_ts),
+    "people": lambda v: type(v) is list,
+}
 RECOMMENDATION_SPEC = {
     "id": is_int, "contact_id": is_int, "interaction_id": opt(is_int), "action": is_str,
     "due_date": opt(is_date), "reason": is_str, "source": is_str, "status": is_str, "created_at": is_ts,
@@ -188,6 +200,8 @@ CONTRACT_EXAMPLES = {
     "interaction": (INTERACTION_SPEC, lambda: _block_after("### Interaction\n")),
     "task": (TASK_SPEC, lambda: _block_after("### Task, TaskBatch")),
     "task_batch": (BATCH_SPEC, _contract_batch),
+    "week_row": (WEEK_ROW_SPEC, lambda: _block_after("### WeekRow")),
+    "week_row_person": (WEEK_ROW_PERSON_SPEC, lambda: _block_after("### WeekRow")["people"][0]),
     "recommendation": (RECOMMENDATION_SPEC, lambda: _block_after("### Recommendation")),
     "followup_draft": (FOLLOWUP_SPEC, lambda: _block_after("### FollowupDraft")),
     "candidate": (CANDIDATE_SPEC, lambda: _block_after("### Candidate\n")),
@@ -855,6 +869,35 @@ def test_task_done_and_snoozed_use_timestamp_and_date_formats():
     out = check_shape(serialize.task(task_row(status="snoozed", snoozed_until=dt.date(2026, 11, 9))), TASK_SPEC)
     assert out["snoozed_until"] == "2026-11-09"
     assert "snooze_reason" not in out and "closed_by_archive" not in out and "contact_id" not in out
+
+
+# ── WeekRow (#828) ────────────────────────────────────────────────────────────────────────────
+def test_week_row_person_exact_output():
+    row = contact_row(promised_date=dt.date(2027, 1, 15), next_step="Send the floor samples",
+                      next_step_date=dt.date(2027, 1, 20), attempts_since_live=2, last_live_at=utc(2026, 6, 1, 15))
+    out = check_shape(serialize.week_row_person(row, 401, True), WEEK_ROW_PERSON_SPEC)
+    assert (out["id"], out["task_id"], out["not_right_person"], out["attempts_since_live"]) == (10, 401, True, 2)
+    assert (out["promised_date"], out["next_step_date"]) == ("2027-01-15", "2027-01-20")
+    assert out["last_live_at"] == "2026-06-01T10:00:00-05:00"
+    out = check_shape(serialize.week_row_person(contact_row(attempts_since_live=None), None, False),
+                      WEEK_ROW_PERSON_SPEC)
+    assert (out["task_id"], out["not_right_person"], out["attempts_since_live"]) == (None, False, 0)
+
+
+def test_week_row_takes_the_first_task_and_the_companys_facts():
+    first = serialize.task(task_row(status="done", done_at=utc(2026, 11, 4, 16, 0)))
+    second = serialize.task(task_row(id=402, contact_id=3, status="snoozed", snoozed_until=dt.date(2026, 11, 9),
+                                     reason="Other.", reasons=["Other"], score=40))
+    people = [serialize.week_row_person(contact_row(), 401, False)]
+    facts = {"misses": 2, "last_live_at": utc(2026, 6, 1, 15), "last_attempt_at": None}
+    out = check_shape(serialize.week_row("ten", [first, second], "done", serialize.company_ref(10, "Prairiefold Foods"),
+                                         facts, people), WEEK_ROW_SPEC)
+    assert (out["id"], out["task_ids"], out["batch_id"], out["kind"], out["score"]) == (401, [401, 402], 41, "followup", 75)
+    assert (out["done_at"], out["snoozed_until"]) == ("2026-11-04T10:00:00-06:00", "2026-11-09")
+    assert (out["misses"], out["last_live_at"]) == (2, "2026-06-01T10:00:00-05:00")
+    assert out["people"] is people and out["company"] == {"id": 10, "name": "Prairiefold Foods"}
+    out = serialize.week_row("due", [serialize.task(task_row())], "open", serialize.company_ref(10, "X"), None, [])
+    assert (out["misses"], out["last_live_at"], out["done_at"], out["snoozed_until"]) == (0, None, None, None)
 
 
 @pytest.mark.parametrize("key", ["id", "batch_id", "kind", "status"])
