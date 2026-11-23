@@ -47,7 +47,8 @@
  * row's id (its first task; the Next up card or a list row), with data-status open | done | snoozed;
  * a person inside a row carries data-person (their contact id); the tracker dots carry
  * data-dot-task; tray items carry data-contact / data-rec; the menu's choices come back as the
- * "bd-menu" event, never as a click on a .menu node.
+ * "bd-menu" event, never as a click on a .menu node (heard on the document: a refresh that redrew
+ * the row while its menu was open must not lose the choice).
  *
  * Routes (all in docs/bd/api-contract.md): GET /api/bd/week (?owner=, ?week_start=),
  * GET /api/bd/users, GET /api/bd/settings, GET /api/bd/contacts/{id},
@@ -1385,7 +1386,9 @@
   });
 
   // The menu's choices, from BD.menu (dispatched on its anchor: a row, Next up, or a person in one).
-  main.addEventListener("bd-menu", function (e) {
+  // Heard on the document: when a background refresh redrew the anchor away while the menu was open,
+  // BD.menu sends the choice there, and the old anchor still names its row and person.
+  document.addEventListener("bd-menu", function (e) {
     var d = e.detail || {};
     var r = rowOf(d.anchor);
     if (!r || !S.canAct) return;

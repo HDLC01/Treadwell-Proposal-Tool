@@ -30,6 +30,14 @@ to a BD page that has not moved (MOVED_PAGES, not "the server answers 200"); the
 Contacts-is-coming page, which links to Add contact; desktop and phone width, where a row with no phone
 number keeps its More menu.
 
+One row per company (#828): the Friday batch gives a company with two people one slot and one row;
+a row opens by click, Enter or Space; a voicemail on one person closes the row and moves "N of 10
+done" once, a second call the same week does not; Not this week, Done and Undo act on the whole row;
+"Due now" is one row per maintenance company; Give Me 10 More never adds a company already on the
+list in any state; a manager opens a row but cannot act on it; a long company name fits at 390 and
+320. The second person at a company (Sue Marlow, Tess Rowan) is added inside each test, so the
+fixture seed's own numbers stay as they are.
+
 BD's own tests of This Week are carried over below the ones above, renamed only where the seed's
 numbers differ from BD's mock week; the few that are not (the contact page has not moved, or the
 recommendation and follow-up routes are Phase 5 placeholders) are listed, one reason each, in the
@@ -1216,3 +1224,215 @@ def test_company_rows_fit_a_phone_with_a_long_name(env, page_as, expect, viewpor
     for sel in (".wk-co-name", ".wk-p-facts", ".wk-p-who"):
         for b in [x.bounding_box() for x in row.locator(sel).all() if x.is_visible()]:
             assert b["x"] + b["width"] <= card["x"] + card["width"] + 0.5, (sel, b)
+
+
+# ── the Weekly 10 is ten companies (#828, the browser half) ─────────────────────────────────────
+# Worked from the seed by hand. Prairie Ridge Builders LLC (company 10): Dana's live talk Oct 20 (101,
+# answered), then her voicemail Nov 2 (102): 1 miss since the last live talk, and a try two days
+# before the seed's Wednesday, so the company rests (3 days) unless a test moves 102 back.
+PRAIRIE, BLUESTEM, KAW, OSAGE = 10, 16, 17, 18
+
+
+def rest_over(env):
+    """Dana's voicemail (102) moved back to Sat, Oct 25: still Prairie Ridge's one miss since the
+    Oct 20 live talk, but no longer inside the company's 3-day rest."""
+    run_sql(env[1], "update interactions set occurred_at = '2026-10-25 16:00:00+00' where id = 102")
+
+
+def add_tess(env):
+    """Tess Rowan, a made-up maintenance person of Avery's at Osage Plains Brewing (company 18), never
+    followed up: due, like Nora."""
+    return run_sql(env[1], "insert into contacts (company_id, name, title, phone, email, category, owner_id, source)"
+                           " values (18, 'Tess Rowan', 'Facilities Lead', '785-555-0115',"
+                           " 'tess.rowan@osageplains.example.com', 'maintenance', 1, 'manual') returning id")[0]["id"]
+
+
+def people_in(nd):
+    return nd.locator("[data-person]").evaluate_all("els => els.map(e => +e.dataset.person)")
+
+
+def row_status(w, company_id):
+    return [r["status"] for r in w["rows"] if r["company"]["id"] == company_id]
+
+
+def test_the_friday_batch_gives_a_company_with_two_people_one_row(env, page_as, expect):
+    """Avery's week emptied, Sue added beside Dana and the rest moved off Prairie Ridge: both would
+    make the 10 on their own (Avery owns five BD people, fewer than the 5 + 5), yet the batch the
+    admin runs gives Prairie Ridge one task and the page one row, holding Dana and Sue. Of Kaw
+    Valley's people only Nora is due on a fresh list (never followed up; Hal's live talk of Aug 20 is
+    inside his 3-a-year cycle), so "Due now" counts one account."""
+    sue = add_sue(env)
+    rest_over(env)
+    run_sql(env[1], "delete from tasks where batch_id = 201")
+    run_sql(env[1], "delete from task_batches where id = 201")
+    _, pg = page_as("/bd/?owner=1", EMERY)
+    pg.locator('[data-act="run-weekly"]').click()
+    expect(toasts(pg)).to_contain_text("This week's list is ready.")
+    wait_week(pg)
+    w = week_json(pg, owner=1)
+    at_prairie = [t["contact"]["id"] for t in w["tasks"] if t["contact"]["id"] in (DANA_C, sue)]
+    assert len(at_prairie) == 1, "Prairie Ridge took %d slots" % len(at_prairie)
+    assert [t["contact"]["id"] for t in w["tasks"] if t["kind"] == "maintenance"] == [NORA_C]
+    shown = pg.locator("[data-task][data-company]").evaluate_all("els => els.map(e => +e.dataset.company)")
+    assert len(shown) == len(set(shown)), "two rows for one company: %r" % shown
+    prairie = pg.locator('[data-task][data-company="%d"]' % PRAIRIE)
+    expect(prairie).to_have_count(1)
+    assert sorted(people_in(prairie)) == sorted([DANA_C, sue])
+    assert people_in(prairie)[0] == at_prairie[0], "the person suggested first leads the row"
+    expect(pg.locator('[data-task][data-company="%d"]' % KAW)).to_have_count(1)
+    expect(pg.locator("#wk-due-line")).to_have_text(DUE_ONE)
+
+
+def test_a_voicemail_on_one_person_closes_the_row_once(env, page_as, expect):
+    """Lena (Bluestem) is added to the 10 so the count can move without filling up: 1 of 3 done
+    (Priya). A voicemail on Dana from Prairie Ridge's closed row closes the row: 2 of 3. A call to
+    Sue the same week (logged on her contact, as the Contacts page would) changes nothing: still 2 of
+    3, and Bluestem's row stays open."""
+    sue = add_sue(env)
+    _add_tasks(env[1], (27, "new", "open"))
+    _, pg = page_as("/bd/", AVERY)
+    wait_week(pg)
+    assert "1 of 3 done" in summary(pg), summary(pg)
+    row = node(pg, DANA)
+    expect(row.locator(".wk-co-misses")).to_have_text("1 try since the last live talk")
+    call(row)
+    sheet(pg).locator('[data-outcome="voicemail"]').click()
+    expect(sheet(pg).locator("[data-saved]")).to_contain_text("Saved as Voicemail")
+    sheet(pg).locator('[data-act="close"]').click()
+    expect(sheet(pg)).to_be_hidden()
+    done = pg.locator('#wk-done [data-task="%d"][data-status="done"]' % DANA)
+    expect(done.locator(".wk-outcome")).to_have_text("Dana Whitlow: Voicemail · Wed, Nov 4")
+    expect(pg.locator("#summary")).to_contain_text("2 of 3 done")
+    assert [(c["kind"], c["outcome"]) for c in history(pg, DANA_C)][0] == ("voicemail", "voicemail")
+    log_by_api(pg, sue, "call", "no_answer")
+    reload_week(pg)
+    assert "2 of 3 done" in summary(pg), summary(pg)
+    w = week_json(pg)
+    assert (w["done_count"], w["total"]) == (2, 3)
+    assert row_status(w, PRAIRIE) == ["done"] and row_status(w, BLUESTEM) == ["open"]
+    expect(pg.locator('#wk-done [data-task="%d"][data-status="done"]' % DANA)).to_have_count(1)
+
+
+def test_not_this_week_and_undo_act_on_the_company_row(env, page_as, expect):
+    """Not this week from the opened row takes Prairie Ridge off as one row (Dana and Sue under it);
+    the list does not refill and nothing counts as done. Undo puts the whole row back."""
+    add_sue(env)
+    _, pg = page_as("/bd/", AVERY)
+    wait_week(pg)
+    total = pg.locator("[data-task]").count()
+    row = node(pg, DANA)
+    row.locator('[data-act="toggle"]').click()
+    row.locator('.wk-co-foot [data-act="snooze"]').click()
+    expect(toasts(pg)).to_contain_text("Taken off this week.")
+    off = pg.locator('#wk-done [data-task="%d"][data-status="snoozed"]' % DANA)
+    expect(off.locator(".who-name")).to_have_text("Prairie Ridge Builders LLC")
+    expect(off.locator(".who-sub")).to_have_text("Dana Whitlow, Sue Marlow")
+    expect(pg.locator(".dot.is-off")).to_have_count(1)
+    pg.wait_for_timeout(400)
+    assert pg.locator("[data-task]").count() == total, "taking a row off must not pull in a new one"
+    assert "1 of 2 done" in summary(pg)
+    assert row_status(week_json(pg), PRAIRIE) == ["snoozed"]
+    off.locator('[data-act="reopen"]').click()
+    back = pg.locator('#wk-rest [data-task="%d"][data-status="open"]' % DANA)
+    expect(back).to_have_count(1)
+    expect(back.locator(".wk-co-first")).to_have_text("Dana Whitlow · Project Manager · +1 more")
+    assert "1 of 2 done" in summary(pg)
+    assert row_status(week_json(pg), PRAIRIE) == ["open"]
+
+
+def test_due_now_is_one_row_per_maintenance_company(env, page_as, expect):
+    """Nora moved to Osage Plains and Tess added there: Give Me 10 More pins both, as ONE Osage row
+    under "Due now" ("Due now: 2 maintenance accounts": Kaw Valley and Osage). Following Nora up
+    leaves the row while Tess is still due; following Tess up clears it."""
+    nora_elsewhere(env)
+    tess = add_tess(env)
+    _, pg = page_as("/bd/", AVERY)
+    wait_week(pg)
+    pg.locator("#ten-more-btn").click()
+    expect(pg.locator("#wk-due-line")).to_have_text("Due now: 2 maintenance accounts")
+    due = pg.locator("#wk-due [data-task]")
+    expect(due).to_have_count(1)
+    assert due.get_attribute("data-company") == str(OSAGE)
+    assert sorted(people_in(due)) == sorted([NORA_C, tess])
+    assert "1 of 2 done" in summary(pg), "Due now is not part of the 10"
+    assert pg.locator("[data-dot-task]").count() == 2
+    log_by_api(pg, NORA_C, "call", "answered")
+    reload_week(pg)
+    expect(pg.locator("#wk-due [data-task]")).to_have_count(1)
+    expect(pg.locator("#wk-due-line")).to_have_text("Due now: 2 maintenance accounts")
+    log_by_api(pg, tess, "meeting")
+    reload_week(pg)
+    assert pg.locator("#wk-due").count() == 0
+    expect(pg.locator("#wk-due-line")).to_have_text(DUE_ONE)
+
+
+@pytest.mark.parametrize("state", ["open", "snoozed"])
+def test_give_me_10_more_never_adds_a_company_already_on_the_list(env, page_as, expect, state):
+    """Sue is at Prairie Ridge, on the 10 through Dana's row (open, or taken off: "in any state"), and
+    the rest is moved off Prairie Ridge so only the list keeps her out. Give Me 10 More adds Bluestem
+    and Cottonwood, never Sue, and "1 of 2 done" does not move."""
+    sue = add_sue(env)
+    rest_over(env)
+    _, pg = page_as("/bd/", AVERY)
+    wait_week(pg)
+    if state == "snoozed":
+        assert post_status(pg, "/api/bd/tasks/%d/snooze" % DANA) == {"ok": True}
+        reload_week(pg)
+    pg.locator("#ten-more-btn").click()
+    extra = pg.locator(".wk-extra")
+    expect(extra.locator(".section-title")).to_have_text("2 more (to get ahead)")
+    names = sorted(t.strip() for t in extra.locator(".wk-co-name").all_inner_texts())
+    assert names == ["Bluestem Logistics", "Cottonwood & Sons Paving"], names
+    w = week_json(pg)
+    assert sue not in [t["contact"]["id"] for t in w["tasks"]], "Sue was added for Prairie Ridge again"
+    assert [r["company"]["id"] for r in w["rows"]].count(PRAIRIE) == 1
+    assert "1 of 2 done" in summary(pg)
+    assert (w["done_count"], w["total"]) == (1, 2)
+
+
+
+def test_a_menu_choice_made_while_the_week_refreshes_still_acts(page_as, expect):
+    """The cause of a flaky run: after a save, This Week refreshes in the background and redraws its
+    rows. A More menu opened before that redraw (it sits on <body>) used to send its choice from the
+    old, removed button, so "Done, nothing to log" did nothing. The week read that closing the call
+    sheet starts is held back here until the menu is open."""
+    _, pg = page_as("/bd/", AVERY)
+    wait_week(pg)
+    pg.evaluate("() => { window.__hold = false; window.__gate = new Promise(r => { window.__open = r; });"
+                " const get = BDApi.get; BDApi.get = (p, ...a) => window.__hold && p.indexOf('/api/bd/week') === 0"
+                " ? window.__gate.then(() => get.call(BDApi, p, ...a)) : get.call(BDApi, p, ...a); }")
+    call(pg.locator("#wk-next"))
+    sheet(pg).locator('[data-outcome="voicemail"]').click()
+    expect(pg.locator("#wk-due-line")).to_have_count(0)
+    pg.evaluate("() => { window.__hold = true; }")
+    sheet(pg).locator('[data-act="close"]').click()
+    expect(sheet(pg)).to_be_hidden()
+    nxt = pg.locator("#wk-next [data-task]")
+    expect(nxt).to_have_attribute("data-task", str(DANA))
+    nxt.locator('[data-act="more"]:visible').first.click()
+    expect(pg.locator(".menu")).to_be_visible()
+    pg.evaluate("() => { window.__anchor = document.querySelector('#wk-next [data-act=\"more\"][aria-expanded=\"true\"]');"
+                " window.__open(); }")
+    pg.wait_for_function("() => window.__anchor && !window.__anchor.isConnected", timeout=10000)
+    pg.locator('.menu [data-act="done"]').click()
+    expect(pg.locator("#week-count")).to_have_text("All 2 done")
+    assert [r["status"] for r in week_json(pg)["rows"] if r["id"] == DANA] == ["done"]
+
+def test_a_manager_opens_a_company_row_but_cannot_act_on_it(env, page_as, expect):
+    """Devon (manager) looks at Avery's week: Prairie Ridge's row opens to Dana and Sue with their
+    titles and phones, beside the company score, and has no Call, More, Not this week or Done. The
+    server refuses him the row's buttons (403) and the row stays open."""
+    sue = add_sue(env)
+    _, pg = page_as("/bd/?owner=1", DEVON)
+    wait_week(pg)
+    row = node(pg, DANA)
+    expect(row).to_contain_text("Priority 82")
+    row.locator('[data-act="toggle"]').click()
+    expect(row.locator('[data-person="%d"]' % sue)).to_contain_text("Estimator · 913-555-0107")
+    expect(row.locator('[data-person="%d"]' % DANA_C)).to_contain_text("Project Manager · 913-555-0101")
+    for sel in ('[data-act="call"]', '[data-act="more"]', '[data-act="snooze"]', '[data-act="done"]', 'a[href^="tel:"]'):
+        assert row.locator(sel).count() == 0, sel
+    for act in ("snooze", "done"):
+        got = post_status(pg, "/api/bd/tasks/%d/%s" % (DANA, act))
+        assert got.get("status") == 403, (act, got)
+    assert row_status(week_json(pg, owner=1), PRAIRIE) == ["open"]

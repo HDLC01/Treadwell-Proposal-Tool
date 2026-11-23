@@ -735,7 +735,9 @@
 
   /** A small menu for `anchorBtn`, on <body> (outside <main>): items [{act, label, icon, href,
    *  danger, sub}] (`sub`: an optional second, smaller line under the label; `href`: see safeHref). Choosing one dispatches a bubbling "bd-menu" CustomEvent {detail: {act, anchor}}
-   *  on the anchor and closes the menu. Arrow keys move, Escape closes, an outside click closes.
+   *  on the anchor and closes the menu. When the page has redrawn the anchor away while the menu was
+   *  open (a background refresh), the event goes to the document instead, still naming the old anchor,
+   *  so the choice is not lost. Arrow keys move, Escape closes, an outside click closes.
    *  On a phone it opens as a bottom action sheet. Opening the same anchor again closes it. */
   function menu(anchorBtn, items) {
     var again = openMenu && openMenu.anchor === anchorBtn;
@@ -806,7 +808,8 @@
       if (!it) return;
       var act = it.getAttribute("data-act");
       closeMenu(!it.hasAttribute("href"));
-      anchorBtn.dispatchEvent(new CustomEvent("bd-menu", { bubbles: true, detail: { act: act, anchor: anchorBtn } }));
+      (doc.contains(anchorBtn) ? anchorBtn : doc).dispatchEvent(
+        new CustomEvent("bd-menu", { bubbles: true, detail: { act: act, anchor: anchorBtn } }));
     });
     scrim.addEventListener("click", function () { closeMenu(true); });
     doc.addEventListener("keydown", m.onKey, true);

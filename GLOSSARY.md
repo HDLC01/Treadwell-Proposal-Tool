@@ -266,7 +266,7 @@ How a Weekly 10 is made: every Friday at 4 PM the BD CRM builds each salesperson
 _Avoid_: Weekly run (that is the job that makes it), weekly list
 
 **Give Me 10 More**:
-The This Week button that adds the next ten companies by score to this week's list, after the Weekly 10. It never changes "N of 10 done", and it never adds a company already on this week's lists in any state, or one where anyone was tried in the last 3 days. A company made a Maintenance account can also leave a small list of the same kind on This Week holding only pinned maintenance follow-ups; that list is not a Give Me 10 More, and its follow-ups show under "Due now".
+The This Week button that adds up to ten more companies, the next by score, to this week's list, after the Weekly 10. It never changes "N of 10 done", and it never adds a company already on this week's lists in any state, or one where anyone was tried in the last 3 days. A company made a Maintenance account can also leave a small list of the same kind on This Week holding only pinned maintenance follow-ups; that list is not a Give Me 10 More, and its follow-ups show under "Due now".
 _Avoid_: Extra 10, ten more, refill
 
 **Maintenance follow-up**:
