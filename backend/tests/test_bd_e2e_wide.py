@@ -115,10 +115,23 @@ def test_at_1920_a_contacts_controls_and_history_keep_their_measure(open_page):
     pg.locator(".cd-tl-when").first.wait_for(timeout=15000)
     seg = pg.locator(".call-seg").first.bounding_box()["width"]
     assert seg <= 520, "the follow-up choice is %dpx wide" % seg
-    gaps = pg.evaluate("""() => [...document.querySelectorAll('.cd-tl-item')].map(it => {
-      const when = it.querySelector('.cd-tl-when'), word = it.querySelector('.cd-tl-word');
-      return when && word ? when.getBoundingClientRect().right - word.getBoundingClientRect().left : 0; })""")
-    assert gaps and max(gaps) <= 640, gaps
+    # The measure is 72 characters of the page's own font, so it is read from the page: 72ch is about
+    # 540px in Windows fonts and 641px in CI's DejaVu Sans. The card itself is over 1300px wide here.
+    got = pg.evaluate("""() => {
+      const main = document.querySelector('.cd-tl-main');
+      const probe = document.createElement('div');
+      probe.style.cssText = 'width:72ch;height:0;position:absolute;visibility:hidden';
+      main.appendChild(probe);
+      const measure = probe.getBoundingClientRect().width;
+      probe.remove();
+      const card = main.closest('.card, section, .cd-main') || main.parentElement;
+      const gaps = [...document.querySelectorAll('.cd-tl-item')].map(it => {
+        const when = it.querySelector('.cd-tl-when'), word = it.querySelector('.cd-tl-word');
+        return when && word ? when.getBoundingClientRect().right - word.getBoundingClientRect().left : 0; });
+      return {measure, gaps, card: card.getBoundingClientRect().width};
+    }""")
+    assert got["gaps"] and max(got["gaps"]) <= got["measure"] + 2, got
+    assert max(got["gaps"]) < 0.7 * got["card"], got
 
 
 @pytest.mark.parametrize("viewport", [PHONE, NARROWEST], ids=["390", "320"])
