@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Contacts · BD CRM · Treadwell</title>
+  <link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg" />
+  <!-- Warm the jsdelivr connection (DNS + TLS, no bytes) before the parser reaches the CDN script tag below. -->
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+  <!-- One light theme, like every page of the tool: no synthesized dark mode. -->
+  <meta name="color-scheme" content="only light" />
+  <link rel="stylesheet" href="/bd/bd.css" />
+</head>
+<body class="bd-app">
+  <!-- Contacts (#810): BD's contacts page as the approved mock-up's list of BD accounts, restyled like
+       the tool. Two tabs (BD, Maintenance), each a list of companies that open to their people; a
+       search; each company's "..." menu; and, as BD had them, the workbook import and To tidy's
+       unknown calls. #811 adds the likely duplicate BD accounts (#ct-dupes) on the Possible duplicates
+       filter. bd-contacts.js shows each control only to the people whose can allows it. -->
+  <main class="page ct-page" id="main">
+    <header class="page-head-row ct-head">
+      <div class="page-head">
+        <p class="eyebrow">BD CRM</p>
+        <h1 class="page-title" id="ct-title">Contacts</h1>
+        <p class="page-sub" id="ct-sub"><span class="skeleton ct-sk-sub"></span></p>
+      </div>
+      <div class="page-actions ct-actions">
+        <button type="button" class="btn" id="ct-import" hidden>Import</button>
+        <input type="file" id="ct-import-file" accept=".xlsx,.csv" hidden aria-label="Choose the workbook to import" />
+        <a class="btn btn-primary" id="ct-add" href="/bd/add.html" hidden>Add contact</a>
+      </div>
+    </header>
+
+    <div id="ct-note" hidden></div>
+
+    <section class="ct-tidy" id="ct-tidy" aria-labelledby="ct-tidy-h" hidden>
+      <h2 class="ct-tidy-title" id="ct-tidy-h" tabindex="-1">To tidy this Friday</h2>
+      <div id="ct-tidy-cards"></div>
+      <div id="ct-unknown" hidden></div>
+    </section>
+
+    <div class="ct-tools" id="ct-tools">
+      <div class="tabs ct-tabs" role="tablist" aria-label="Contact lists">
+        <button type="button" role="tab" id="ct-tab-bd" data-tab="bd" aria-selected="true" aria-controls="ct-list">BD accounts</button>
+        <button type="button" role="tab" id="ct-tab-maintenance" data-tab="maintenance" aria-selected="false" aria-controls="ct-list" tabindex="-1">Maintenance</button>
+      </div>
+      <p class="ct-moved" id="ct-moved" hidden></p>
+      <div class="ct-searchrow" role="search">
+        <div class="input-wrap ct-search">
+          <label class="sr-only" for="ct-q">Search accounts and people</label>
+          <span class="input-lead" id="ct-q-ico"></span>
+          <input class="input" id="ct-q" type="search" autocomplete="off" placeholder="Search account, person, phone or email" />
+        </div>
+        <div class="ct-sort">
+          <label class="ct-sort-label" for="ct-sort">Sort</label>
+          <select class="select" id="ct-sort"></select>
+        </div>
+      </div>
+      <div class="scroll-row ct-chips" id="ct-chips" role="group" aria-label="Filters"></div>
+      <p class="ct-count" id="ct-count" hidden></p>
+      <section class="ct-dupes" id="ct-dupes" aria-label="Likely duplicate accounts" hidden></section>
+      <div class="ct-list" id="ct-list" role="tabpanel" aria-labelledby="ct-tab-bd" aria-busy="true"><div class="skeleton skeleton-card"></div></div>
+    </div>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
+  <script src="/js/icons.js"></script>
+  <script src="/auth.js"></script>
+  <script src="/shared.js"></script>
+  <script src="/js/crm-core.js"></script>
+  <script src="/bd/js/bd-api.js"></script>
+  <script src="/bd/js/bd-shared.js"></script>
+  <script src="/bd/js/bd-core.js"></script>
+  <script src="/bd/js/bd-contacts.js"></script>
+</body>
+</html>

@@ -404,6 +404,14 @@ def test_initials_work_from_a_display_name_too():
     assert got == ["KL", "TH", "MO"]
 
 
+def test_initials_leave_out_a_title_and_a_suffix():
+    """The BD CRM's contacts carry titles (#806), and the BD pages name people through this file.
+    A leading title and a trailing suffix are not part of the initials, unless they are all there is."""
+    got = run("out(['Dr. Ian Pruitt','Ray Duchene Jr.','Mrs Ana de la Cruz','Dr.','Drew Penn',"
+              "'Kyle Loseke III'].map(C.initialsOf));")
+    assert got == ["IP", "RD", "AC", "D", "DP", "KL"]
+
+
 def test_a_colour_is_stable_for_one_person():
     """Same estimator, same colour on every page, in every session, on every machine —
     otherwise the colour carries no information at all."""

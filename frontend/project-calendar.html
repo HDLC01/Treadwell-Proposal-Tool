@@ -65,10 +65,14 @@
     .seg button[aria-pressed="true"] { background:var(--card); color:var(--red-dark);
       box-shadow:0 1px 2px rgba(60,50,40,.08); }
     .grow { flex:1; }
-    .tw-search { min-height:34px; padding:6px 10px; border:1px solid var(--line);
-      border-radius:9px; font:inherit; font-size:13px; background:var(--card); color:var(--ink);
-      width:220px; }
-    .tw-search:focus, .btn:focus-visible, .seg button:focus-visible, .bar:focus-visible,
+    /* The search box and the Plan vs Actual filters' selects (#819) share one look, as in
+       calendar.html. A select is capped so a long Foreman never widens the bar. */
+    .tw-select, .tw-search { min-height:34px; padding:6px 10px; border:1px solid var(--line);
+      border-radius:9px; font:inherit; font-size:13px; background:var(--card); color:var(--ink); }
+    .tw-search { width:220px; }
+    .tw-select { max-width:220px; }
+    .tw-select:disabled { opacity:.5; cursor:not-allowed; }
+    .tw-select:focus, .tw-search:focus, .btn:focus-visible, .seg button:focus-visible, .bar:focus-visible,
     .dlg-close:focus-visible { outline:2px solid var(--red); outline-offset:2px; }
 
     /* ── notices and states ── */
@@ -92,6 +96,20 @@
     /* ── Plan vs Actual: a table-like list in a white card ── */
     .pva-bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:0 0 12px; }
     .pva-count { color:var(--ink-v); font-size:12.5px; font-variant-numeric:tabular-nums; }
+    /* The Work type, Foreman and Status filters (#819): labelled selects beside the search box,
+       wrapping onto as many lines as the width needs. */
+    .pva-filters { display:flex; align-items:center; gap:8px 12px; flex-wrap:wrap; }
+    .pva-f { display:inline-flex; align-items:center; gap:6px; min-width:0; }
+    .pva-f label { font:600 12px system-ui; color:var(--ink-v); white-space:nowrap; }
+    /* The pager under the list (#819): "Showing A–B of N", Previous, the page numbers, Next, and
+       the page size. The page shown reads like a selected tab: Oxblood text, no Signal Red. */
+    .pva-pager { display:flex; align-items:center; gap:8px 12px; flex-wrap:wrap; margin:10px 2px 0; }
+    .pva-range { color:var(--ink-v); font-size:12.5px; font-variant-numeric:tabular-nums; }
+    .pva-pages { display:flex; align-items:center; gap:4px; flex-wrap:wrap; }
+    .pva-pages .pg { min-width:34px; justify-content:center; font-variant-numeric:tabular-nums; }
+    .pva-pages .pg[aria-current="page"] { background:var(--surf-low); color:var(--red-dark);
+      box-shadow:inset 0 0 0 1px var(--ink-v); }
+    .pva-pages .pg-gap { color:var(--ink-mut); padding:0 4px; }
     .pva-card { background:var(--card); border:1px solid var(--line); border-radius:14px;
       box-shadow:var(--shadow); }
     /* On a phone the columns cannot fit 375px, so the list scrolls sideways INSIDE its card and
@@ -335,6 +353,13 @@
       h1 { font-size:23px; }
       .tw-search { width:100%; }
       .toolbar .grow { display:none; }
+      .pva-filters { width:100%; }
+      .pva-f { flex:1 1 150px; }
+      .pva-f .tw-select { flex:1; }
+      .tw-select { width:100%; max-width:none; min-width:0; }
+      /* Touch: the selects and the page buttons a little taller, the page buttons further apart. */
+      .tw-select, .pva-pages .pg { min-height:40px; }
+      .pva-pages { gap:6px; }
       .facts { grid-template-columns:100px minmax(0,1fr); }
       .pd-pairs { grid-template-columns:repeat(2,minmax(0,1fr)); }
       .pd-two b { font-size:20px; }
@@ -379,6 +404,18 @@
         <input id="pva-q" type="search" class="tw-search" placeholder="Search job, number, foreman…"
                maxlength="200"
                aria-label="Search Plan vs Actual" autocomplete="off" />
+        <!-- The filters (#819). Status is the summary strip's count filter, not a second one: the
+             select and the count buttons set each other, and it is disabled while the counts are
+             not known. The options come from the list; "All" is no filter. -->
+        <div class="pva-filters" role="group" aria-label="Filter the list">
+          <span class="pva-f"><label for="pva-wt">Work type</label>
+            <select id="pva-wt" class="tw-select"><option value="">All</option></select></span>
+          <span class="pva-f"><label for="pva-fm">Foreman</label>
+            <select id="pva-fm" class="tw-select"><option value="">All</option></select></span>
+          <span class="pva-f"><label for="pva-st">Status</label>
+            <select id="pva-st" class="tw-select" disabled><option value="">All</option></select></span>
+          <button type="button" id="pva-clear" class="btn" hidden>Clear filters</button>
+        </div>
         <span id="pva-count" class="pva-count" aria-live="polite"></span>
         <button type="button" id="pva-showall" class="btn" hidden>Show all jobs</button>
         <span class="grow"></span>
@@ -419,6 +456,16 @@
           </div>
           <p id="pva-empty" class="note" hidden></p>
         </div>
+        <!-- The pager (#819): the page splits the list it has; the server sends it whole, and
+             Download takes every matching job. -->
+        <nav id="pva-pager" class="pva-pager" aria-label="Pages" hidden>
+          <span id="pva-range" class="pva-range" aria-live="off"></span>
+          <span id="pva-pages" class="pva-pages"></span>
+          <span class="pva-f"><label for="pva-per">Per page</label>
+            <select id="pva-per" class="tw-select">
+              <option value="25">25</option><option value="50">50</option><option value="100">100</option>
+            </select></span>
+        </nav>
         <p id="pva-foot" class="pva-foot"></p>
       </div>
       <!-- Raken projects logging hours with no job in the list (#782). Not counted with the jobs. -->

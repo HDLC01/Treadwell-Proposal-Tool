@@ -1,7 +1,11 @@
-"""Print the test files one CI shard runs: `python shard_tests.py <heavy|rest> <shard 1..N> <N> [tests_dir]`.
+"""Print the test files one CI shard runs: `python shard_tests.py <heavy|rest|browser> <shard 1..N> <N> [tests_dir]`.
 
 Every file lands in exactly ONE shard of ONE group, so the shards together run the whole suite and
 nothing twice (backend/tests/test_ci_shards.py asserts the union and the disjointness).
+
+THE BROWSER GROUP (#806). The BD CRM's browser suites (test_bd_e2e_*.py) need Chromium and start
+the live app, so they are in no shard of the matrix: ci.yml's browser job runs
+`shard_tests.py browser 1 1 tests` on its own runner, which has Playwright's Chromium installed.
 
 WHY TWO GROUPS (2026-10-27). The suite runs `--dist loadfile`, which keeps a file on one core.
 That was the bottleneck: test_polish_travel_sequences_answer.py alone is about 11 minutes, so its
@@ -22,6 +26,7 @@ import sys
 from pathlib import Path
 
 HEAVY_PREFIXES = ("test_polish_travel_sequences",)
+BROWSER_PREFIXES = ("test_bd_e2e_",)
 DEFAULT_HEAVY_COST = 60.0
 HEAVY_COST = {
     "test_polish_travel_sequences_answer.py": 649,
@@ -35,11 +40,15 @@ HEAVY_COST = {
     "test_polish_travel_sequences_reload_more.py": 89,
     "test_polish_travel_sequences_session.py": 83,
 }
-GROUPS = ("heavy", "rest")
+GROUPS = ("heavy", "rest", "browser")
+
+
+def is_browser(name):
+    return name.startswith(BROWSER_PREFIXES)
 
 
 def is_heavy(name):
-    return name.startswith(HEAVY_PREFIXES)
+    return name.startswith(HEAVY_PREFIXES) and not is_browser(name)
 
 
 def shard_files(names, group, shard, total):
@@ -50,8 +59,11 @@ def shard_files(names, group, shard, total):
         raise ValueError("shard must be between 1 and %d" % total)
     names = sorted(names)
     if group == "rest":
-        rest = [n for n in names if not is_heavy(n)]
+        rest = [n for n in names if not is_heavy(n) and not is_browser(n)]
         return [n for i, n in enumerate(rest) if i % total == shard - 1]
+    if group == "browser":
+        browser = [n for n in names if is_browser(n)]
+        return [n for i, n in enumerate(browser) if i % total == shard - 1]
     # Greedy longest-first: each file goes to the shard with the least cost so far (ties: lowest
     # shard, then name order), so the split is the same on every runner.
     heavy = sorted((n for n in names if is_heavy(n)),

@@ -253,6 +253,8 @@ const CAPS = [
   { href: "/project-calendar.html", label: "Project Analytics", api: [], locked: false },
   { href: "/info-sheet.html", label: "Info Sheet", api: [], locked: false },
   { href: "/followups.html", label: "Follow-ups", api: [], locked: false },
+  // The BD CRM, one tab for every BD page, hide-only (#806).
+  { href: "/bd/", label: "BD CRM", api: [], locked: false },
   { href: "/v2-board.html", label: "Estimating Tool v2", api: [], locked: false },
   { href: "/polish-estimates.html", label: "v2 Estimates", api: [], locked: false },
   { href: "/analytics.html", label: "Analytics", api: [], locked: false },

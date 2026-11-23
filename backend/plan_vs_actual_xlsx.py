@@ -3,7 +3,8 @@
 The download exists so the projected hours can be pasted into the weekly budget report while that
 report still lives in Excel. It is built here from the SAME response the page lays out
 (plan_vs_actual.fetch()), filtered by the page's own rule (plan_vs_actual.visible_projects) with
-the page's status filter and search text, so the file and the screen hold the same rows.
+the page's status filter, search text, and Work type and Foreman filters (#819), so the file and
+the screen hold the same rows: every matching job, never one page of them.
 
 THE WORKBOOK. Two sheets:
   * "Plan vs Actual": one row per job listed, Punch rows and Not linked rows included, with the
@@ -289,9 +290,11 @@ def message_workbook(message: str, today: _dt.date) -> bytes:
     return _save(wb)
 
 
-def build(data: Dict[str, Any], q: str, status: str, today: _dt.date) -> bytes:
+def build(data: Dict[str, Any], q: str, status: str, today: _dt.date, work_type: str = "",
+          foreman: str = "") -> bytes:
     """The workbook for the response `data` (plan_vs_actual.fetch()), filtered as the page filters
-    it with the search text `q` and the pressed count `status`."""
+    it with the search text `q`, the pressed count `status` and the Work type and Foreman filters
+    (#819)."""
     projects = [p for p in data.get("projects") or [] if isinstance(p, dict)]
     message = ""
     if data.get("connected") is False:
@@ -301,8 +304,10 @@ def build(data: Dict[str, Any], q: str, status: str, today: _dt.date) -> bytes:
     if message:
         return message_workbook(message, today)
 
-    shown = pva.visible_projects(data, q, status)
+    shown = pva.visible_projects(data, q, status, work_type, foreman)
     st = pva.status_filter(data, status)
+    wt = pva.work_type_filter(data, work_type)
+    fm = pva.foreman_filter(data, foreman)
     s = data.get("summary") if isinstance(data.get("summary"), dict) else {}
     counts = s.get("counts") if pva.counts_known(data) else None
     raken = data.get("raken") if isinstance(data.get("raken"), dict) else {}
@@ -327,6 +332,8 @@ def build(data: Dict[str, Any], q: str, status: str, today: _dt.date) -> bytes:
         ("Raken as of", _central_stamp(raken.get("as_of")), STAMP_FMT),
         ("Counts so far run through", _day(data.get("so_far_through")), DATE_FMT),
         ("Status filter", status_label(st) or "All jobs"),
+        ("Work type filter", wt or "All"),
+        ("Foreman filter", (pva.NO_FOREMAN_LABEL if fm == pva.FOREMAN_NONE else fm) or "All"),
         ("Search", str(q).strip() or None),
         ("Jobs in the list", len(projects), WHOLE_FMT),
         ("Jobs in this file", len(shown), WHOLE_FMT),

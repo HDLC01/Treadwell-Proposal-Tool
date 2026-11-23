@@ -739,6 +739,8 @@
   .msg.staff .att-file:hover { border-color:rgba(255,255,255,.78); }
   /* The queue above the composer, before anything is sent. */
   .att-strip { display:flex; flex-wrap:wrap; gap:6px; }
+  /* portal.js hides the queue while it is empty; a class rule beats the UA [hidden] rule. */
+  .att-strip[hidden] { display:none; }
   .att-chip { display:inline-flex; align-items:center; gap:6px; padding:4px 6px 4px 4px;
     border-radius:8px; background:rgba(0,0,0,.06); font-size:12px; max-width:220px; }
   .att-chip img { width:26px; height:26px; object-fit:cover; border-radius:5px; display:block; }

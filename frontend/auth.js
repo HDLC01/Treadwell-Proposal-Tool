@@ -6,8 +6,8 @@
  *  - Inits the Supabase client from /api/public-config (publishable anon key).
  *  - Caches the access token on `window.__TW_TOKEN` so shared.js's API calls
  *    (and the autofill fetch) send `Authorization: Bearer …`.
- *  - Gates app pages: no session → redirect to /login.html; wrong domain →
- *    sign out + bounce with a message.
+ *  - Gates app pages: no session → redirect to /login.html (remembering the page asked
+ *    for, so sign-in returns there); wrong domain → sign out + bounce with a message.
  *  - Renders a bottom-left "logged in as" indicator (+ an Admin link by role),
  *    and the left sidebar nav.
  */
@@ -45,6 +45,10 @@
   // expands it because ONE tab owns TWO pages (the Polish beta's step 2 is opened from two places
   // that are not its sidebar row), and a second copy of that mapping here is the copy that rots.
   let DENIED_PAGES = {};
+  // Rows a switched-off feature takes out of this person's menu (/api/me's nav_off): the BD CRM row
+  // while BD_ENABLED is off (#806). Not a denial, so it never reaches the Admin page's matrix and
+  // never paints a refusal card; renderSidebar adds it to the live menu's leave-out list only.
+  let NAV_OFF = [];
 
   function denyFor(role) {
     const list = NAV_DENY && NAV_DENY[role];
@@ -76,6 +80,12 @@
     deniedPaths: () => denyFor((currentUser || {}).role || "user").slice(),
     navDeny: () => NAV_DENY,
     setNavDeny: (map) => { NAV_DENY = map && typeof map === "object" ? map : {}; },
+    // BD's /api/bd/me as { status, body }, asked once per page and shared: the sidebar's BD group
+    // reads it for its sections, and a BD page can read the same answer rather than ask again.
+    bdMe: () => bdMe(),
+    // A failed BD answer in words, { message, code }: the one reader the sidebar's BD group, the BD
+    // home page and BD's API helper (bd-api.js) all use, so the same answer reads the same everywhere.
+    bdFailure: (status, body) => bdFailure(status, body),
   };
 
   function apiBase() { return window.TW_API_BASE || ""; }
@@ -128,12 +138,22 @@
     if (onLogin) return wireLoginPage(session, domain);
 
     // ── Gate every app page ──
-    if (!session) { location.replace(LOGIN_PAGE); return; }
+    if (!session) { rememberReturn(); location.replace(LOGIN_PAGE); return; }
     const email = (session.user && session.user.email || "").toLowerCase();
     if (!email.endsWith("@" + domain)) {
       try { await sb.auth.signOut(); } catch {}
       location.replace(LOGIN_PAGE + "?denied=1");
       return;
+    }
+    // Back to the page asked for before sign-in. Google lands everybody on the home page (the
+    // address given to Supabase never changes), so the home page is where the return is taken.
+    // Taken nowhere else, so a value left in a tab never pulls an open page somewhere else.
+    if (path === HOME_PAGE) {
+      const back = takeReturn();
+      if (back && back !== location.pathname + (location.search || "")) {
+        location.replace(back);
+        return;
+      }
     }
     // The token is in hand and this is a Treadwell account. Anything that needs only the
     // token may go NOW, in parallel with the /api/me below rather than behind it.
@@ -149,6 +169,7 @@
       NAV_DENY = {};
       NAV_DENY[currentUser.role || "user"] = (me && me.nav_denied) || [];
       DENIED_PAGES = (me && me.nav_denied_pages) || {};
+      NAV_OFF = (me && Array.isArray(me.nav_off)) ? me.nav_off : [];
     } catch {
       currentUser = { email, role: "user", name: (session.user.user_metadata || {}).full_name };
     }
@@ -162,7 +183,7 @@
   // ── Login page ──
   function wireLoginPage(session, domain) {
     const email = (session && session.user && session.user.email || "").toLowerCase();
-    if (session && email.endsWith("@" + domain)) { location.replace(HOME_PAGE); return; }
+    if (session && email.endsWith("@" + domain)) { location.replace(takeReturn() || HOME_PAGE); return; }
     const btn = document.getElementById("google-signin");
     if (btn) btn.addEventListener("click", function () {
       btn.disabled = true; signInWithGoogle();
@@ -187,6 +208,47 @@
     try { await (sb && sb.auth.signOut()); } catch {}
     window.__TW_TOKEN = null;
     location.replace(LOGIN_PAGE);
+  }
+
+  // ── Sign-in returns you to the page you asked for (#806) ──
+  // When this file sends a signed-out person to sign in, the page they asked for waits in THIS
+  // browser tab (sessionStorage, so it never follows them to another tab or another day) and they
+  // are sent back to it after sign-in. The address given to Supabase does not change, so no Supabase
+  // setting moves: Google lands them on the home page, and init() sends them on from there. The
+  // sign-in page does the same for somebody who reaches it already signed in.
+  //
+  // A return is followed ONLY when it is a same-origin relative path: one leading slash and not two,
+  // no backslash anywhere after it (a browser reads "/\host" as "//host"), no scheme, no space or
+  // control character (the URL parser strips a tab or a newline, which turns "/<tab>/host" back
+  // into "//host"), resolving to this origin, and not the sign-in page (a loop). Anything else is
+  // dropped and the home page stands.
+  const RETURN_KEY = "tw_return_to";
+
+  function safeReturnPath(raw) {
+    const s = String(raw == null ? "" : raw);
+    if (!/^\/(?![\/\\])/.test(s) || s.indexOf("\\") !== -1) return "";
+    if (/[\u0000- \u007f]/.test(s)) return "";
+    let u;
+    try { u = new URL(s, location.origin); } catch { return ""; }
+    if (u.origin !== location.origin) return "";
+    if (u.pathname.toLowerCase() === LOGIN_PAGE) return "";
+    return s;
+  }
+
+  // The page being refused, path and query (never the hash, which can carry a token), or nothing.
+  function rememberReturn() {
+    const asked = safeReturnPath(location.pathname + (location.search || ""));
+    try {
+      if (asked) sessionStorage.setItem(RETURN_KEY, asked);
+      else sessionStorage.removeItem(RETURN_KEY);
+    } catch { /* storage blocked: sign-in still works and lands on the home page */ }
+  }
+
+  // Used once: read and cleared together, so a stale value never redirects a later visit.
+  function takeReturn() {
+    let raw = null;
+    try { raw = sessionStorage.getItem(RETURN_KEY); sessionStorage.removeItem(RETURN_KEY); } catch {}
+    return safeReturnPath(raw);
   }
 
   // ── UI: bottom-left "logged in as" + nav ──
@@ -250,7 +312,10 @@
     // point of Hanz choosing real blocking: the server refuses this tab's own routes too, so a
     // present-but-hidden link would be a link to a page that says no.
     if (RENDER_DENY.indexOf(href) !== -1) return "";
-    const active = location.pathname.toLowerCase().endsWith(href.toLowerCase()) || alsoActive(href);
+    // THE WHOLE PATH, NOT ITS END (#804). Every page used to sit at the root, so "ends with the href"
+    // and "is the href" were the same test. The BD CRM lives under /bd/ with its own admin.html and
+    // analytics.html, and an ends-with match lit the tool's Admin and Analytics rows there.
+    const active = location.pathname.toLowerCase() === href.toLowerCase() || alsoActive(href);
     // `tag` marks a page as not-yet-finished. Optional so the other twelve callers are
     // untouched, and rendered as a chip rather than folded into the label so it reads as a
     // status on the page rather than part of its name.
@@ -266,8 +331,169 @@
   // hoisted declaration, so no call order can reach it before it exists.
   function alsoActive(href) {
     const ALSO_ACTIVE_ON = { "/v2-board.html": ["/polish-intake.html", "/polish-estimate.html"] };
+    // A row that owns a whole folder: the BD CRM row is lit on every page under /bd/ (#806), and,
+    // because every other row is matched by its full path (#804), no tool row is lit there.
+    const ALSO_ACTIVE_UNDER = { "/bd/": "/bd/" };
     const here = location.pathname.toLowerCase();
-    return (ALSO_ACTIVE_ON[href] || []).some((p) => here.endsWith(p));
+    if (ALSO_ACTIVE_UNDER[href] && here.indexOf(ALSO_ACTIVE_UNDER[href]) === 0) return true;
+    return (ALSO_ACTIVE_ON[href] || []).some((p) => here === p);
+  }
+
+  // ── The BD CRM group (#806; Q5 as changed by Hanz on 2026-11-19) ──
+  // There is no BD sub nav under the top bar. The BD CRM row is a collapsible group and BD's sections
+  // sit indented under it, INSIDE the sidebar: so they are in the phone drawer, and the sidebar's
+  // Hide menu hides them with everything else.
+  //
+  //  - A chevron button beside the row opens and shuts them (aria-expanded, aria-controls).
+  //  - Open on every /bd/ page. Elsewhere it starts shut, and on desktop it reopens the way it was
+  //    last left (tw_bd_open, read and written at desktop width only, exactly like tw_nav_open).
+  //  - A section shows only when BD's can() map, from /api/bd/me, allows it for the person's BD role,
+  //    and only once its page has moved. BD_SECTIONS is that list: an entry is ADDED by the ticket
+  //    that moves its page (Contacts, Add contact, Potential BD Contacts, Analytics, Admin), so the
+  //    sidebar never links to a page that is not there yet. Its can field names the can() key that must be
+  //    true, or lists keys of which any one will do; an empty one means every BD role.
+  //  - /api/bd/me is asked only when the group is open, once per page: a shut group costs the tool's
+  //    own pages nothing.
+  //  - The current section is lit by the page's full path, like every row (#804).
+  const BD_SECTIONS = [
+    { href: "/bd/", also: ["/bd/index.html"], label: "This Week", can: "week" },
+    // #810. Contacts is every BD role's, as BD's rail had it (the assistant's BD home).
+    { href: "/bd/contacts.html", label: "Contacts" },
+    // #808. One contact's page (/bd/contact.html) has moved too, but it is not a section: it opens
+    // from a name, and on it no section is lit.
+    { href: "/bd/add.html", label: "Add contact", can: "add_contact" },
+    // #809. Potential BD Contacts is every BD role's, as BD's rail had it.
+    { href: "/bd/review.html", label: "Potential BD Contacts" },
+    { href: "/bd/analytics.html", label: "Analytics", can: "analytics" },
+    // Admin is in the admins' sidebar alone, as BD's rail had it (#810). The page itself still opens
+    // for the assistant (BD's page gate, admin_area), who reaches her unknown calls from the Attach
+    // links on Contacts; the salesperson's workbook import is back on Contacts too.
+    { href: "/bd/admin.html", label: "Admin", can: "admin" },
+  ];
+  let BD_OPEN = false;          // the group's state on this page (the live menu's only)
+  let bdMePromise = null;
+
+  function onBdPage() { return location.pathname.toLowerCase().indexOf("/bd/") === 0; }
+
+  function bdStartsOpen() {
+    if (onBdPage()) return true;
+    let wideNow = false;
+    try { wideNow = window.matchMedia("(min-width: 768px)").matches; } catch {}
+    if (!wideNow) return false;
+    let kept = null;
+    try { kept = localStorage.getItem("tw_bd_open"); } catch {}
+    return kept === "1";
+  }
+
+  function bdMe() {
+    if (!bdMePromise) {
+      bdMePromise = fetch(apiBase() + "/api/bd/me",
+        { headers: { Authorization: "Bearer " + (window.__TW_TOKEN || "") } })
+        .then(async function (r) {
+          let body = null;
+          try { body = await r.json(); } catch {}
+          return { status: r.status, body: body };
+        })
+        .catch(function () { return { status: 0, body: null }; });
+    }
+    return bdMePromise;
+  }
+
+  // A failed BD answer ({ status, body }: status 0 when the server could not be reached) in words:
+  // BD's own sentence (message), else the tool's sign-in gate's (its 401 and 403 put the sentence in
+  // error and send no message), else a plain one by status. The code is BD's (error, when it is a
+  // code, not a sentence), else the status's. Self-contained, so a test can lift it on its own.
+  function bdFailure(status, body) {
+    const CODE = /^[a-z][a-z_]*$/;
+    const STATUS_CODE = { 400: "bad_request", 401: "unauthenticated", 403: "forbidden", 404: "not_found",
+      409: "conflict", 413: "too_large", 429: "rate_limited", 500: "error", 503: "unavailable" };
+    const d = body && typeof body === "object" ? body : {};
+    const err = typeof d.error === "string" ? d.error : "";
+    const isCode = !!err && CODE.test(err);
+    let message = typeof d.message === "string" && d.message ? d.message : (err && !isCode ? err : "");
+    if (!message) {
+      if (!status) message = "Can't reach the server. Check your connection and try again.";
+      else if (status === 401) message = "Sign in again to continue.";
+      else if (status === 403) message = "You don't have a BD role.";
+      else if (status >= 500) message = "The BD CRM isn't answering right now. Try again in a minute.";
+      else message = "Something went wrong.";
+    }
+    const code = isCode ? err : (status ? (STATUS_CODE[status] || "error") : "network");
+    return { message: message, code: code };
+  }
+
+  // The row with its chevron and the (empty) section list. row is navItem()'s output, "" when the row
+  // is denied or switched off, and then the whole group goes with it. open is the state to draw: an
+  // Admin-page spec render passes false, so the role matrix reads the same row it always reads.
+  // Markup only: renderSidebar decides open, and the wiring finds the chevron in what was drawn.
+  function bdGroup(row, open) {
+    if (!row) return "";
+    return '<div class="tw-nav-group" id="tw-bd-group"><div class="tw-nav-grouprow">' + row +
+      '<button type="button" class="tw-nav-chev' + (open ? " tw-open" : "") + '" id="tw-bd-chev"' +
+      ' aria-expanded="' + (open ? "true" : "false") + '" aria-controls="tw-bd-sections"' +
+      ' aria-label="BD CRM sections" title="Show or hide the BD CRM sections">' +
+      icon("chev-down", 16) + '</button></div>' +
+      '<div class="tw-nav-sub' + (open ? "" : " tw-shut") + '" id="tw-bd-sections" aria-live="polite"' +
+      (open ? "" : " hidden") + '></div></div>';
+  }
+
+  function bdNote(text) { return '<div class="tw-bd-note">' + esc(text) + '</div>'; }
+
+  // The sections this person's BD role may open, from /api/bd/me's answer; a failed answer is said in
+  // bdFailure's words, the same sentence the BD home page shows. Every value is escaped.
+  function bdSectionsMarkup(res) {
+    const body = (res && res.body) || {};
+    if (!res || res.status < 200 || res.status >= 300 || !body.ok) {
+      return bdNote(bdFailure(res && res.status, res && res.body).message);
+    }
+    const can = body.can || {};
+    const here = location.pathname.toLowerCase();
+    const shown = BD_SECTIONS.filter((s) => {
+      const keys = [].concat(s.can || []);
+      return !keys.length || keys.some((k) => can[k] === true);
+    });
+    if (!shown.length) return bdNote("Nothing here for your BD role yet.");
+    return shown.map(function (s) {
+      const on = here === s.href || (s.also || []).indexOf(here) !== -1;
+      return '<a class="tw-bd-sec' + (on ? " active" : "") + '" href="' + esc(s.href) + '"' +
+        (on ? ' aria-current="page"' : "") + '>' + esc(s.label) + '</a>';
+    }).join("");
+  }
+
+  // Puts BD_OPEN on the page: the chevron's state, the list's hidden, and (open) its sections. Until
+  // /api/bd/me answers, an open list says it is loading rather than sit empty (the list is a polite
+  // live region, so the links, or the reason there are none, are announced when they arrive).
+  let bdSettled = false;
+  function paintBdGroup() {
+    const chev = document.getElementById("tw-bd-chev");
+    const list = document.getElementById("tw-bd-sections");
+    if (!chev || !list) return;
+    chev.setAttribute("aria-expanded", BD_OPEN ? "true" : "false");
+    chev.classList.toggle("tw-open", BD_OPEN);
+    list.hidden = !BD_OPEN;
+    list.classList.toggle("tw-shut", !BD_OPEN);
+    if (!BD_OPEN) return;
+    if (!bdSettled) list.innerHTML = bdNote("Loading...");
+    bdMe().then(function (res) {
+      bdSettled = true;
+      list.innerHTML = bdSectionsMarkup(res);
+      bdRevealLit(list);
+    });
+  }
+
+  // On a laptop-height window the menu is taller than the window, and BD's sections sit low in it,
+  // so the lit one (Add contact, on its own page) can land below the menu's fold, behind the user
+  // card. Scroll the menu, and only the menu, just far enough to show the whole row. The page itself
+  // never moves, which is why this is not scrollIntoView: on a phone the menu is a drawer off screen.
+  function bdRevealLit(list) {
+    const lit = list.querySelector(".tw-bd-sec.active");
+    if (!lit) return;
+    const nav = list.closest(".tw-nav");
+    if (!nav) return;
+    const r = lit.getBoundingClientRect();
+    const n = nav.getBoundingClientRect();
+    if (r.bottom > n.bottom) nav.scrollTop += Math.ceil(r.bottom - n.bottom);
+    else if (r.top < n.top) nav.scrollTop -= Math.ceil(n.top - r.top);
   }
 
   // Every role this app has, least privileged first. profiles.py stores exactly one of these
@@ -424,6 +650,10 @@
     // an unsaved policy); otherwise both modes read the same NAV_DENY, so the menu on the page and
     // the matrix on the Admin page cannot report different things about the same role.
     RENDER_DENY = (spec && denyForSpec) ? denyForSpec : denyFor(u.role || "user");
+    // The live menu also leaves out what a switched-off feature took away (NAV_OFF); a spec render
+    // never does, so the Admin page keeps every switch while, say, BD is off.
+    if (!spec) RENDER_DENY = RENDER_DENY.concat(NAV_OFF);
+    if (!spec) BD_OPEN = bdStartsOpen();
     const isAdmin = u.role === "admin" || u.role === "super_admin";
     const roleLabel = u.role === "super_admin" ? "SUPER ADMIN" : (u.role === "admin" ? "ADMIN" : "USER");
     const roleClass = u.role === "super_admin" ? "super" : (u.role === "admin" ? "admin" : "user");
@@ -529,6 +759,11 @@
       // their BETA tag as well as the heading: the heading says which shelf, and the tag is what survives
       // being read alone in the Admin role matrix, which prints labels without headings.
       '<div class="tw-section">Beta</div>' +
+      // THE BD CRM (#806, spec #802): the business-development CRM, moved in under /bd/ as a beta.
+      // First under Beta, as in the approved mock-up. Its glyph is users (people to call), which
+      // no other row uses. The row is a collapsible group: bdGroup() adds the chevron and BD's
+      // sections under it, and drops the whole group when the row is denied or switched off.
+      bdGroup(navItem("/bd/", "users", "BD CRM", "BETA"), !spec && BD_OPEN) +
       // Opens at the beta's INTAKE, step 1 of its own four. A door straight into step 2 starts
       // an estimator on a project with no name, no bid date and no job conditions - and the conditions are
       // exactly what moved onto the intake form in the 2026-08-17 rework, so pricing first would mean
@@ -659,8 +894,26 @@
     // Tapping a destination shuts the sheet. The next page starts shut anyway, but the drawer would
     // otherwise sit over the old page for the whole load, which reads as a tap that did nothing.
     aside.addEventListener("click", (e) => {
-      if (!wide() && e.target.closest && e.target.closest(".tw-nav-item")) setOpen(false);
+      if (!wide() && e.target.closest &&
+          (e.target.closest(".tw-nav-item") || e.target.closest(".tw-bd-sec"))) setOpen(false);
     });
+    // The BD CRM group's chevron, when the menu drew the group (a denied or switched-off row takes
+    // it away). Its choice is kept at desktop width only, like the sidebar's own. Guarded: a fault in
+    // one Beta row's group must not cost every page its bell and top bar, which are wired below. The
+    // row itself is a plain link and still works.
+    if (aside.innerHTML.indexOf('id="tw-bd-chev"') !== -1) {
+      try {
+        const chev = document.getElementById("tw-bd-chev");
+        if (chev) chev.addEventListener("click", () => {
+          BD_OPEN = !BD_OPEN;
+          if (wide()) { try { localStorage.setItem("tw_bd_open", BD_OPEN ? "1" : "0"); } catch {} }
+          paintBdGroup();
+        });
+        paintBdGroup();
+      } catch (e) {
+        try { console.warn("BD CRM sections could not be drawn", e); } catch {}
+      }
+    }
     // Crossing DOWN over 768px shuts it, so a rotate or a resize cannot leave a desktop rail lying
     // across a phone. It writes nothing: setOpen only persists while wide() is true, and by the time
     // this fires it is false - so a rotate can never poison the remembered desktop state.
@@ -968,6 +1221,25 @@ text-decoration:none;color:var(--tw-ink);}
   padding:3px 5px;border-radius:4px;background:rgba(200,16,46,.12);
   color:var(--tw-red-dark);white-space:nowrap;}
 .tw-nav-item.active .tw-nav-ico{color:var(--tw-red-dark);}
+/* The BD CRM group (#806): the row and its chevron on one line, BD's sections indented under it.
+   The section list is hidden by its hidden attribute, and .tw-nav-sub.tw-shut, set with it, is the
+   display:none that makes hidden hold whatever else styles the list (DESIGN.md: never hidden alone).
+   A class, not an attribute selector (the phone-shell CSS resolver refuses those). So is the
+   chevron's: it points right while shut and down while open. */
+.tw-nav-grouprow{display:flex;align-items:center;gap:2px;}
+.tw-nav-grouprow .tw-nav-item{flex:1;min-width:0;}
+.tw-nav-chev{flex:none;width:32px;height:32px;border:none;background:none;color:var(--tw-ink-v);
+cursor:pointer;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;padding:0;}
+.tw-nav-chev:hover{background:var(--tw-surf-low);}
+.tw-nav-chev .tw-ico{transform:rotate(-90deg);transition:transform .15s ease;}
+.tw-nav-chev.tw-open .tw-ico{transform:none;}
+.tw-nav-sub{margin:2px 0 6px 20px;padding-left:10px;border-left:1px solid rgba(27,28,28,.1);}
+.tw-nav-sub.tw-shut{display:none;}
+.tw-bd-sec{display:flex;align-items:center;min-height:34px;padding:0 10px;border-radius:7px;
+text-decoration:none;color:var(--tw-ink);font-size:13.5px;}
+.tw-bd-sec:hover{background:var(--tw-surf-low);}
+.tw-bd-sec.active{background:rgba(200,16,46,.1);color:var(--tw-red-dark);font-weight:600;}
+.tw-bd-note{padding:6px 10px;font-size:12px;line-height:1.4;color:var(--tw-ink-v);}
 .tw-user{display:flex;align-items:center;gap:10px;padding:8px;border-radius:9px;background:var(--tw-surf-low);
 margin-top:10px;border-top:1px solid rgba(27,28,28,.05);}
 .tw-avatar{width:34px;height:34px;border-radius:50%;color:#fff;
@@ -1033,6 +1305,8 @@ html.tw-nav-open #tw-burger{display:none;}
      it takes the larger. Everything else in the chrome is a lone glyph and takes 44. The DESKTOP
      sizes are untouched - a mouse does not need this and the rail has no room for it. */
   .tw-nav-item{min-height:48px;}
+  .tw-bd-sec{min-height:44px;}
+  .tw-nav-chev{width:44px;height:44px;}
   #tw-burger,#tw-burger.tw-burger-inline{width:44px;height:44px;}
   .tw-collapse,.tw-signout,.tw-bell{min-width:44px;min-height:44px;display:inline-flex;
     align-items:center;justify-content:center;}

@@ -140,6 +140,33 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    # THE BD CRM'S DATABASE TESTS (#805) need a real Postgres 16. Their fixtures
+    # (backend/tests/_bd_conftest.py) make a throwaway database per xdist worker on this server
+    # from BD_TEST_DATABASE_URL (an ADMIN url, set on the Run tests step below), migrate it with
+    # BD's runner, connect the app as a login holding only bd_app's rights, and drop it at the
+    # end. They FAIL on CI when the variable is missing, so the BD tests can never skip themselves
+    # green. Every shard starts it: harmless where no BD file landed, and one definition for all.
+    # On the job that already runs the suite, so no new check for branch protection to require
+    # (backend/tests/test_bd_ci_postgres.py checks both).
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab # 16.15, BD's own CI pin
+        env:
+          # NOT `bd`: the default search_path is "$user", public, so an admin named bd would
+          # create its unqualified objects inside schema bd (test_bd_ci_postgres.py).
+          POSTGRES_USER: postgres
+          # Services cannot read the `env` context, so this is repeated in BD_TEST_DATABASE_URL
+          # below; the two must agree. A throwaway for a container that lives as long as the
+          # job, not a secret.
+          POSTGRES_PASSWORD: bd-ci-only
+          POSTGRES_DB: postgres
+        ports:
+          - 5439:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     defaults:
       run:
         working-directory: backend
@@ -217,21 +244,116 @@ jobs:
           # the job — which is the designed outcome, but the job is meant to be GREEN and
           # actually comparing, not red.
           TW_PORTAL_REPO: ${{ github.workspace }}/portal
+          # The Postgres service above, as its superuser: the BD fixtures create and drop their
+          # own bd_test_* databases on it (#805).
+          BD_TEST_DATABASE_URL: postgresql://postgres:bd-ci-only@localhost:5439/postgres
         run: python -m pytest $(python ../.github/scripts/shard_tests.py ${{ matrix.group }} ${{ matrix.shard }} ${{ matrix.total }} tests) -q -n auto --dist ${{ matrix.dist }}
 
+  # ── the BD CRM's browser suites (#806, Q28) ─────────────────────────────────────────────────────
+  #
+  # tests/test_bd_e2e_*.py drive a real Chromium against the LIVE APP: tests/_bd_browser.py makes a
+  # bd_test_* database on the Postgres below, migrates it with BD's runner, loads the fixture seed
+  # and starts uvicorn on main.app with BD switched on (BD_ENABLED=on in the server's own
+  # environment). They run here and in no shard (.github/scripts/shard_tests.py's browser group;
+  # backend/tests/test_ci_shards.py counts them as covered), because only this runner installs
+  # Chromium. Missing Playwright, Chromium or the database FAILS them on CI rather than skipping.
+  #
+  # SIGN-IN IS FAKED ONLY INSIDE THE TEST PROCESS: the server the test starts overrides the tool's
+  # verify step in that process (tests/_bd_e2e_server.py), and the test's browser context stands in
+  # for the Supabase script. Nothing here sets a variable for it, and no setting the app reads can
+  # turn it on (backend/tests/test_bd_fake_sign_in.py). No secret is read.
+  #
+  # The required `test` gate below needs this job, so branch protection still names one check
+  # (backend/tests/test_bd_ci_browser.py).
+  browser:
+    needs: fingerprint
+    name: tests (browser)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # The same server as the shards' (test_bd_ci_browser.py checks they are equal).
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab # 16.15, BD's own CI pin
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: bd-ci-only
+          POSTGRES_DB: postgres
+        ports:
+          - 5439:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Reusing an earlier green run
+        if: needs.fingerprint.outputs.skip == 'true'
+        # backend/ does not exist on this path (the checkout is skipped): see the shard job.
+        working-directory: .
+        run: |
+          echo "Tree ${{ needs.fingerprint.outputs.tree }} already passed on commit ${{ needs.fingerprint.outputs.matched }}."
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.fingerprint.outputs.skip != 'true'
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: needs.fingerprint.outputs.skip != 'true'
+        with:
+          python-version: '3.11'          # matches the production Dockerfile
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - name: Install dependencies
+        if: needs.fingerprint.outputs.skip != 'true'
+        run: pip install -r requirements-dev.txt
+
+      # The version comes from the playwright package pinned in requirements-dev.txt, so the
+      # browser always matches the library. --with-deps adds the system libraries Chromium needs.
+      - name: Install Chromium for the browser suites
+        if: needs.fingerprint.outputs.skip != 'true'
+        run: python -m playwright install --with-deps chromium
+
+      # An empty file list would make pytest fall back to `testpaths` and run the WHOLE suite here,
+      # so it is refused. One worker: each suite starts one server and one Chromium for its module.
+      - name: Run the browser suites
+        if: needs.fingerprint.outputs.skip != 'true'
+        env:
+          # The Postgres service above, as its superuser (the same URL as the shards').
+          BD_TEST_DATABASE_URL: postgresql://postgres:bd-ci-only@localhost:5439/postgres
+          # The suites' server is given BD_ENABLED=on by tests/_bd_browser.py either way; set here
+          # too so this process reads the BD CRM as on, like the app it drives.
+          BD_ENABLED: "on"
+        run: |
+          set -euo pipefail
+          FILES=$(python ../.github/scripts/shard_tests.py browser 1 1 tests)
+          if [ -z "$FILES" ]; then
+            echo "::error::the browser job has no files"; exit 1
+          fi
+          echo "$FILES"
+          # $FILES is split on purpose: one argument per test file (the names have no spaces).
+          # shellcheck disable=SC2086
+          python -m pytest $FILES -q
+
   # THE REQUIRED CHECK. Branch protection requires a check named `test`; the shards above have
-  # their own names, so this job is the single name that is green only when every shard is.
+  # their own names, so this job is the single name that is green only when every shard is, and
+  # the browser job too (#806).
   test:
-    needs: shard
+    needs: [shard, browser]
     if: always()
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      - name: Every shard must have passed
+      - name: Every shard and the browser job must have passed
         run: |
           echo "shards: ${{ needs.shard.result }}"
+          echo "browser: ${{ needs.browser.result }}"
           test "${{ needs.shard.result }}" = "success"
+          test "${{ needs.browser.result }}" = "success"
 
   audit:
     # pip-audit scans the PRODUCTION dependencies for known CVEs.

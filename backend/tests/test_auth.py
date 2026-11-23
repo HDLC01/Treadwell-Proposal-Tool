@@ -80,6 +80,47 @@ def test_token_without_email_rejected_401(real_verify_token):
     assert e.value.status == 401
 
 
+def test_a_token_with_no_expiry_is_rejected_401(real_verify_token):
+    """PyJWT checks `exp` only when it is there, so a signed token without one would never expire
+    (#806: the BD CRM now relies on this verifier, and BD's own required it). Supabase always sets it.
+
+    Mutation: drop options={"require": ["exp"]} -- the token gets in."""
+    with pytest.raises(supabase_client.AuthError) as e:
+        real_verify_token("Bearer " + _token("kyle@wetreadwell.com", exp=None))
+    assert e.value.status == 401 and e.value.detail == "Invalid or expired token."
+
+
+@pytest.mark.parametrize("why, email", [
+    ("the Kelvin sign, which lower-cases to k", chr(0x212A) + "yle@wetreadwell.com"),
+    ("a Cyrillic a in the name", "kyle" + chr(0x0430) + "@wetreadwell.com"),
+    ("a NUL", "ky" + chr(0) + "le@wetreadwell.com"),
+    ("two @", "kyle@evil.example@wetreadwell.com"),
+])
+def test_an_email_that_is_not_plain_ascii_with_one_at_is_rejected_403(real_verify_token, why, email):
+    """#806: an address that is not plain printable ASCII with one "@" could lower-case into someone
+    else's ("K" + "yle" with the Kelvin sign is kyle) or not be storable. Refused like a wrong domain."""
+    with pytest.raises(supabase_client.AuthError) as e:
+        real_verify_token("Bearer " + _token(email))
+    assert e.value.status == 403, why
+
+
+@pytest.mark.parametrize("value", [5, True, ["kyle@wetreadwell.com"], {"a": "kyle@wetreadwell.com"}])
+def test_an_email_claim_of_the_wrong_type_is_401_not_a_crash(real_verify_token, value):
+    with pytest.raises(supabase_client.AuthError) as e:
+        real_verify_token("Bearer " + _token(value))
+    assert e.value.status == 401
+
+
+def test_verify_identity_returns_the_email_the_subject_and_the_name(real_verify_identity):
+    """The gate's verify step keeps who signed in, not just the address (#806)."""
+    tok = _token("Kyle@WeTreadwell.com", sub="7c1e0f5a-0000-4000-8000-000000000001",
+                 user_metadata={"full_name": "  Kyle Example  "})
+    assert real_verify_identity("Bearer " + tok) == {
+        "email": "kyle@wetreadwell.com", "sub": "7c1e0f5a-0000-4000-8000-000000000001", "name": "Kyle Example"}
+    bare = _token("kyle@wetreadwell.com")
+    assert real_verify_identity("Bearer " + bare) == {"email": "kyle@wetreadwell.com", "sub": None, "name": None}
+
+
 # ── only a Google sign-in from our own project is staff (security audit, 2026-09-28) ─────────────
 @pytest.mark.parametrize("why, claims, status", [
     ("an email/password account", {"app_metadata": {"provider": "email", "providers": ["email"]},
