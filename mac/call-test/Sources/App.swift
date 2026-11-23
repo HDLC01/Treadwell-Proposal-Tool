@@ -18,6 +18,11 @@ struct CallTestApp: App {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        MainActor.assumeIsolated { TestController.shared?.stopBeforeQuit() }
+        return .terminateNow
+    }
 }
 
 struct ContentView: View {

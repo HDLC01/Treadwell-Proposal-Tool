@@ -93,11 +93,44 @@ final class LevelMeter {
     }
 }
 
+/// AAC at the source's own rate and channel count. No fixed bitrate: AirPods in call mode run at
+/// 16 or 24 kHz, where a fixed 96 kbps is out of the encoder's range and the file never opens.
+/// Callers pass a format of at most 2 channels.
 private func aacSettings(_ fmt: AVAudioFormat) -> [String: Any] {
     [AVFormatIDKey: kAudioFormatMPEG4AAC,
      AVSampleRateKey: fmt.sampleRate,
-     AVNumberOfChannelsKey: min(fmt.channelCount, 2),
-     AVEncoderBitRateKey: 96_000]
+     AVNumberOfChannelsKey: fmt.channelCount,
+     AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue]
+}
+
+/// Remembers the first error writing a recording file, so the log can say the file is broken
+/// even though the level meter (fed before the write) shows sound.
+final class WriteErrors {
+    private let lock = NSLock()
+    private var first: String?
+    private var count = 0
+    private var reported = false
+
+    func note(_ error: Error) {
+        lock.lock(); defer { lock.unlock() }
+        count += 1
+        if first == nil { first = "\(error)" }
+    }
+
+    func reset() {
+        lock.lock(); defer { lock.unlock() }
+        first = nil; count = 0; reported = false
+    }
+
+    /// The first error, once; nil afterwards and while there is none.
+    func takeNew() -> String? {
+        lock.lock(); defer { lock.unlock() }
+        guard let first, !reported else { return nil }
+        reported = true
+        return first
+    }
+
+    var total: Int { lock.lock(); defer { lock.unlock() }; return count }
 }
 
 private func address(_ selector: AudioObjectPropertySelector) -> AudioObjectPropertyAddress {
@@ -149,6 +182,30 @@ private func deviceName(_ device: AudioObjectID) -> String {
     stringProperty(device, kAudioObjectPropertyName) ?? "unknown"
 }
 
+/// The aggregate device's input streams, in the order their buffers reach the IOProc.
+private func inputStreams(_ device: AudioObjectID) -> [AudioObjectID] {
+    var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyStreams,
+                                          mScope: kAudioObjectPropertyScopeInput,
+                                          mElement: kAudioObjectPropertyElementMain)
+    var size: UInt32 = 0
+    guard AudioObjectGetPropertyDataSize(device, &addr, 0, nil, &size) == noErr, size > 0 else { return [] }
+    var ids = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
+    guard AudioObjectGetPropertyData(device, &addr, 0, nil, &size, &ids) == noErr else { return [] }
+    return ids
+}
+
+private func streamFormat(_ stream: AudioObjectID) -> AudioStreamBasicDescription? {
+    var addr = address(kAudioStreamPropertyVirtualFormat)
+    var size = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+    var asbd = AudioStreamBasicDescription()
+    guard AudioObjectGetPropertyData(stream, &addr, 0, nil, &size, &asbd) == noErr else { return nil }
+    return asbd
+}
+
+private func describe(_ fmt: AVAudioFormat) -> String {
+    "\(Int(fmt.sampleRate)) Hz, \(fmt.channelCount) ch\(fmt.isInterleaved ? " interleaved" : "")"
+}
+
 /// How long a recorder may go without sound data before it counts as stopped.
 private let stalledAfter: TimeInterval = 2
 
@@ -163,6 +220,13 @@ final class SystemAudioTap {
     private(set) var outputName = ""
     private var outputID = AudioObjectID(kAudioObjectUnknown)
     private var outputRate: Float64 = 0
+    /// Holds just the tap's buffers. With AirPods the recording device also carries the AirPods
+    /// microphone, whose buffers come first; the tap's are always the last ones.
+    private var tapList: UnsafeMutableAudioBufferListPointer?
+    private var tapBufferCount = 1
+    let writeErrors = WriteErrors()
+    /// One line for the log: what the recording device delivers, set at each start.
+    private(set) var setupNote = ""
 
     var isRunning: Bool { aggregateID != kAudioObjectUnknown }
 
@@ -182,10 +246,9 @@ final class SystemAudioTap {
         var addr = address(kAudioTapPropertyFormat)
         var size = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
         status = AudioObjectGetPropertyData(tapID, &addr, 0, nil, &size, &asbd)
-        guard status == noErr, let fmt = AVAudioFormat(streamDescription: &asbd) else {
+        guard status == noErr, let tapFormat = AVAudioFormat(streamDescription: &asbd) else {
             stop(); throw AudioError(step: "read the sound format", status: status)
         }
-        format = fmt
 
         let output: AudioObjectID
         do { output = try defaultDevice(input: false) } catch { stop(); throw error }
@@ -209,6 +272,19 @@ final class SystemAudioTap {
         status = AudioHardwareCreateAggregateDevice(aggregate as CFDictionary, &aggregateID)
         guard status == noErr else { stop(); throw AudioError(step: "set up the recording device", status: status) }
 
+        // The tap is the recording device's last input stream. Its own format there is what the
+        // IOProc really gets (the device may resample the tap to the speakers' rate).
+        let streams = inputStreams(aggregateID)
+        var fmt = tapFormat
+        if let last = streams.last, var real = streamFormat(last), let f = AVAudioFormat(streamDescription: &real) {
+            fmt = f
+        }
+        format = fmt
+        tapBufferCount = fmt.isInterleaved ? 1 : Int(fmt.channelCount)
+        tapList = AudioBufferList.allocate(maximumBuffers: tapBufferCount)
+        setupNote = "recording device has \(streams.count) input stream(s); tap \(describe(tapFormat)), delivered as \(describe(fmt))"
+        writeErrors.reset()
+
         if let url {
             do {
                 file = try AVAudioFile(forWriting: url, settings: aacSettings(fmt),
@@ -216,11 +292,15 @@ final class SystemAudioTap {
             } catch { stop(); throw error }
         }
         status = AudioDeviceCreateIOProcIDWithBlock(&procID, aggregateID, queue) { [weak self] _, input, _, _, _ in
-            guard let self, let fmt = self.format,
-                  let buffer = AVAudioPCMBuffer(pcmFormat: fmt, bufferListNoCopy: input, deallocator: nil)
+            guard let self, let fmt = self.format, let tapList = self.tapList else { return }
+            let all = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input))
+            let n = self.tapBufferCount
+            guard all.count >= n else { return }
+            for i in 0..<n { tapList[i] = all[all.count - n + i] }
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: fmt, bufferListNoCopy: tapList.unsafePointer, deallocator: nil)
             else { return }
             self.meter.feed(buffer)
-            try? self.file?.write(from: buffer)
+            do { try self.file?.write(from: buffer) } catch { self.writeErrors.note(error) }
         }
         guard status == noErr else { stop(); throw AudioError(step: "attach the recorder", status: status) }
         status = AudioDeviceStart(aggregateID, procID)
@@ -236,7 +316,11 @@ final class SystemAudioTap {
             AudioHardwareDestroyAggregateDevice(aggregateID)
         }
         if tapID != kAudioObjectUnknown { AudioHardwareDestroyProcessTap(tapID) }
-        queue.sync { file = nil }
+        queue.sync {
+            file = nil
+            tapList?.unsafeMutablePointer.deallocate()
+            tapList = nil
+        }
         procID = nil
         aggregateID = AudioObjectID(kAudioObjectUnknown)
         tapID = AudioObjectID(kAudioObjectUnknown)
@@ -268,6 +352,7 @@ final class MicRecorder {
     private(set) var inputName = ""
     private(set) var channels = 0
     private(set) var isRunning = false
+    let writeErrors = WriteErrors()
 
     /// `resetMeter: false` is a restart in the middle of a test call: the seconds counts carry on.
     func start(writingTo url: URL?, resetMeter: Bool = true) throws {
@@ -280,17 +365,37 @@ final class MicRecorder {
         inputName = inputID != kAudioObjectUnknown ? deviceName(inputID)
             : (AVCaptureDevice.default(for: .audio)?.localizedName ?? "unknown")
         channels = Int(fmt.channelCount)
+        writeErrors.reset()
+        // AAC here takes 1 or 2 channels. A mic array with more (some displays and USB mics) is
+        // saved as mono from its first channel.
+        let mono: AVAudioFormat? = fmt.channelCount > 2
+            ? AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: fmt.sampleRate, channels: 1, interleaved: false)
+            : nil
+        let fileFormat = mono ?? fmt
         var newFile: AVAudioFile?
         if let url {
-            newFile = try AVAudioFile(forWriting: url, settings: aacSettings(fmt),
-                                      commonFormat: fmt.commonFormat, interleaved: fmt.isInterleaved)
+            newFile = try AVAudioFile(forWriting: url, settings: aacSettings(fileFormat),
+                                      commonFormat: fileFormat.commonFormat, interleaved: fileFormat.isInterleaved)
         }
         fileLock.lock(); file = newFile; fileLock.unlock()
         input.installTap(onBus: 0, bufferSize: 4096, format: fmt) { [weak self] buffer, _ in
             guard let self else { return }
             self.meter.feed(buffer)
+            var toWrite: AVAudioPCMBuffer? = buffer
+            if let mono {
+                toWrite = nil
+                if let src = buffer.floatChannelData, !buffer.format.isInterleaved,
+                   let one = AVAudioPCMBuffer(pcmFormat: mono, frameCapacity: buffer.frameLength),
+                   let dst = one.floatChannelData {
+                    one.frameLength = buffer.frameLength
+                    dst[0].update(from: src[0], count: Int(buffer.frameLength))
+                    toWrite = one
+                }
+            }
             self.fileLock.lock()
-            try? self.file?.write(from: buffer)
+            if let toWrite {
+                do { try self.file?.write(from: toWrite) } catch { self.writeErrors.note(error) }
+            }
             self.fileLock.unlock()
         }
         engine.prepare()

@@ -55,10 +55,24 @@ final class TestController: ObservableObject {
     var anyRunning: Bool { runs.contains { $0.running } }
     var anyDone: Bool { runs.contains { $0.done } }
 
+    /// The one window's controller, so quitting can finish a running test's files first.
+    static weak var shared: TestController?
+
     init() {
         mic = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized ? .ok : .notYet
         openLog()
         write("Mac: \(macModel()), \(ProcessInfo.processInfo.operatingSystemVersionString)")
+        TestController.shared = self
+    }
+
+    /// Quitting or closing the window mid-call: stop like the Stop button, so the recordings are
+    /// finished and playable instead of cut off.
+    func stopBeforeQuit() {
+        for run in runs where run.running {
+            write("Test \(run.id): the app was closed during the call, stopping it first.")
+            stop(run.id)
+        }
+        try? log?.synchronize()
     }
 
     // MARK: Allow
@@ -131,6 +145,7 @@ final class TestController: ObservableObject {
         runs[i].started = Date()
         runs[i].seconds = 0
         write("Test \(id) started. Speakers/headset: \(tap.outputName). Microphone: \(micRecorder.inputName) (\(micRecorder.channels) channel(s))")
+        write("Test \(id): \(tap.setupNote)")
         lastProcesses = []
         logProcesses()
         meterTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { _ in
@@ -152,6 +167,13 @@ final class TestController: ObservableObject {
     private func keepRecordersGoing() {
         guard let id = runs.first(where: { $0.running })?.id else { return }
 
+        if let e = tap.writeErrors.takeNew() {
+            write("Test \(id): saving the other person's part \(themPart) failed: \(e). The meter still counts, but that file may be empty.")
+        }
+        if let e = micRecorder.writeErrors.takeNew() {
+            write("Test \(id): saving your part \(youPart) failed: \(e). The meter still counts, but that file may be empty.")
+        }
+
         let themWhy = themDown ? "the last restart failed" : tap.problem()
         if let why = themWhy, themPart < maxParts {
             tap.stop()
@@ -159,7 +181,7 @@ final class TestController: ObservableObject {
             do {
                 try tap.start(writingTo: partFile(id, "them", themPart), resetMeter: false)
                 themDown = false
-                write("Test \(id): other person's recorder restarted as part \(themPart) because \(why). Now on \(tap.outputName).")
+                write("Test \(id): other person's recorder restarted as part \(themPart) because \(why). Now on \(tap.outputName); \(tap.setupNote).")
             } catch {
                 if !themDown { write("Test \(id): other person's recorder couldn't restart after \(why): \(error). Trying every second.") }
                 themDown = true
@@ -189,6 +211,8 @@ final class TestController: ObservableObject {
         runs[i].them = tap.meter.summary
         runs[i].you = micRecorder.meter.summary
         themLevel = -120; youLevel = -120
+        if let e = tap.writeErrors.takeNew() { write("Test \(id): saving the other person's part \(themPart) failed: \(e).") }
+        if let e = micRecorder.writeErrors.takeNew() { write("Test \(id): saving your part \(youPart) failed: \(e).") }
         let t = runs[i].them!, y = runs[i].you!
         write("Test \(id) stopped after \(runs[i].seconds) s. Other person: sound in \(t.withSound) of \(t.total) s, \(themPart) part(s). You: sound in \(y.withSound) of \(y.total) s, \(youPart) part(s).")
     }
