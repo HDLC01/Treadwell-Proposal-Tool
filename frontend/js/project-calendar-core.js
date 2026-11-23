@@ -377,9 +377,100 @@
     });
   }
 
-  /** The list as shown: the search box and the pressed count together. */
-  function visibleProjects(projects, q, status) {
-    return filterByStatus(filterProjects(projects, q), status);
+  /** The list as shown: the search box, the pressed count, and the Work type and Foreman filters
+   *  (#819, `filters` {work_type, foreman}), all together. Each is applied as given: the page
+   *  passes the ones in force (viewFilters), as it passes statusFilter's status. */
+  function visibleProjects(projects, q, status, filters) {
+    return filterByFields(filterByStatus(filterProjects(projects, q), status), filters);
+  }
+
+  // ── the Work type and Foreman filters (#819) ──
+  // plan_vs_actual.py's work_type_filter, foreman_filter and visible_projects are the same rule on
+  // the server (the Excel download); tests/test_plan_vs_actual_xlsx.py runs both on the same input.
+  // The value "No foreman" stands for in the Foreman select and the address. No Foreman can be
+  // written so on the calendar: a Foreman is the inside of a title's last parenthesis and starts
+  // with a letter (project_calendar._NAME_RE).
+  var FOREMAN_NONE = "(none)";
+  var NO_FOREMAN_LABEL = "No foreman";
+
+  /** A Foreman, a Work type or a filter value as compared: trimmed, case ignored. "" for none.
+   *  plan_vs_actual._key is the same. */
+  function filterKey(v) {
+    return String(v == null ? "" : v).trim().toLowerCase();
+  }
+
+  /** The rows of the Work type `filters.work_type` (matched as the row's sub-line words it,
+   *  workTypeOf, so "Work type unknown" picks the rows with none) and the Foreman
+   *  `filters.foreman` (FOREMAN_NONE picks the rows with none). Case and surrounding spaces are
+   *  ignored; an empty value is no filter. */
+  function filterByFields(projects, filters) {
+    var f = filters && typeof filters === "object" ? filters : {};
+    var wt = filterKey(f.work_type);
+    var fm = filterKey(f.foreman);
+    return (Array.isArray(projects) ? projects : []).filter(function (p) {
+      if (!p || typeof p !== "object") return false;
+      if (wt && filterKey(workTypeOf(p)) !== wt) return false;
+      if (fm === FOREMAN_NONE) return !filterKey(p.foreman);
+      return !fm || filterKey(p.foreman) === fm;
+    });
+  }
+
+  /** The Work type select's options: the server's colour-to-Work-type list (`work_types` in the
+   *  response), in its order, then the words for any other colour or none. */
+  function workTypeOptions(data) {
+    var seen = Object.create(null);
+    var out = [];
+    var list = data && Array.isArray(data.work_types) ? data.work_types : [];
+    list.concat([{ name: WORK_TYPE_UNKNOWN_LABEL }]).forEach(function (w) {
+      var name = w && typeof w.name === "string" ? w.name.trim() : "";
+      if (!name || seen[name.toLowerCase()]) return;
+      seen[name.toLowerCase()] = true;
+      out.push({ value: name, label: name });
+    });
+    return out;
+  }
+
+  /** The Foreman select's options: the distinct Foremen of the jobs in the list (trimmed, case
+   *  ignored, the spelling first met kept), sorted without regard to case, then "No foreman" when
+   *  a job has none. */
+  function foremanOptions(projects) {
+    var seen = Object.create(null);
+    var out = [];
+    var none = false;
+    (Array.isArray(projects) ? projects : []).forEach(function (p) {
+      if (!p || typeof p !== "object") return;
+      var name = String(p.foreman == null ? "" : p.foreman).trim();
+      if (!name) { none = true; return; }
+      if (seen[name.toLowerCase()]) return;
+      seen[name.toLowerCase()] = true;
+      out.push({ value: name, label: name });
+    });
+    out.sort(function (a, b) {
+      var x = a.value.toLowerCase(), y = b.value.toLowerCase();
+      return x < y ? -1 : (x > y ? 1 : 0);
+    });
+    if (none) out.push({ value: FOREMAN_NONE, label: NO_FOREMAN_LABEL });
+    return out;
+  }
+
+  /** The option `value` stands for, in the option's own spelling, or "" when no option is it. */
+  function pickOption(options, value) {
+    var k = filterKey(String(value == null ? "" : value).slice(0, SEARCH_MAX));
+    if (!k) return "";
+    for (var i = 0; i < options.length; i++) {
+      if (options[i].value.toLowerCase() === k) return options[i].value;
+    }
+    return "";
+  }
+
+  /** The Work type filtering the list: `value` when the select offers it, else none. */
+  function workTypeFilter(data, value) {
+    return pickOption(workTypeOptions(data), value);
+  }
+
+  /** The Foreman filtering the list: `value` when the select offers it, else none. */
+  function foremanFilter(data, value) {
+    return pickOption(foremanOptions(data && data.projects), value);
   }
 
   /** Workdays left, or "Starts <date>" before the job starts and "Finished" after its Deadline,
@@ -582,17 +673,32 @@
     return active === id ? "" : id;
   }
 
-  /** The line beside the search box: "5 jobs", or "2 of 5 jobs" while the search or a count
-   *  filters the list. */
-  function listCountText(shown, total, q, status) {
-    if (String(q || "").trim() || status) return shown + " of " + total + " jobs";
+  /** The line beside the search box: "5 jobs", or "2 of 5 jobs" while the search, a count, or the
+   *  Work type or Foreman filter (`filters`) narrows the list. */
+  function listCountText(shown, total, q, status, filters) {
+    var f = filters || {};
+    if (String(q || "").trim() || status || f.work_type || f.foreman) {
+      return shown + " of " + total + " jobs";
+    }
     return jobsText(total);
   }
 
-  /** What a list filtered down to nothing says. "" when nothing filters it. */
-  function noMatchText(q, status) {
+  /** What a list filtered down to nothing says, naming the filters. "" when nothing filters it. */
+  function noMatchText(q, status, filters) {
+    var f = filters || {};
     var label = statusLabel(status);
     var searched = !!String(q || "").trim();
+    if (f.work_type || f.foreman) {
+      var items = [];
+      if (f.work_type) items.push(String(f.work_type));
+      if (f.foreman) {
+        items.push(filterKey(f.foreman) === FOREMAN_NONE ? NO_FOREMAN_LABEL
+          : "Foreman " + String(f.foreman).trim());
+      }
+      if (label) items.push(label);
+      return "No job matches " + (searched ? "the search and " : "") + "the filters: "
+        + items.join(", ") + ".";
+    }
     if (searched && label) return "No " + label + " job matches the search.";
     if (searched) return "No job matches the search.";
     return label ? "No job is " + label + "." : "";
@@ -600,19 +706,195 @@
 
   // ── the Excel download (#785) ──
   var DOWNLOAD_PATH = "/api/project-analytics/export.xlsx";
+  // The search and the three filters, in the order the download's and the address's query strings
+  // name them. VIEW_KEYS add the page and the page size: the address's own keys (#819). Every other
+  // key in the address belongs to someone else (Connect Raken's raken_code and raken_state, #781).
+  var FILTER_KEYS = ["q", "status", "work_type", "foreman"];
+  var VIEW_KEYS = FILTER_KEYS.concat(["page", "per"]);
 
   /** The download's address: the list as it is filtered on screen, the pressed count (`status`,
-   *  one of the four counts) and the search text (`q`) as query parameters. The server filters
-   *  with this file's own rule (plan_vs_actual.visible_projects mirrors visibleProjects). A GET:
-   *  it writes nothing. */
-  function downloadHref(q, status) {
+   *  one of the four counts), the search text (`q`) and the Work type and Foreman filters
+   *  (`filters`, #819) as query parameters, each cut to SEARCH_MAX. Never the page or the page
+   *  size: the file holds every matching job. The server filters with this file's own rule
+   *  (plan_vs_actual.visible_projects mirrors visibleProjects). A GET: it writes nothing. */
+  function downloadHref(q, status, filters) {
+    var f = filters || {};
     var parts = [];
     if (status && SUMMARY_COUNTS.indexOf(status) >= 0) {
       parts.push("status=" + encodeURIComponent(status));
     }
-    var text = String(q == null ? "" : q).slice(0, SEARCH_MAX);
-    if (text.trim()) parts.push("q=" + encodeURIComponent(text));
+    var given = { q: q, work_type: f.work_type, foreman: f.foreman };
+    FILTER_KEYS.forEach(function (k) {
+      if (k === "status") return;      // first, above: one of the four counts or nothing
+      var text = String(given[k] == null ? "" : given[k]).slice(0, SEARCH_MAX);
+      if (text.trim()) parts.push(k + "=" + encodeURIComponent(text));
+    });
     return DOWNLOAD_PATH + (parts.length ? "?" + parts.join("&") : "");
+  }
+
+  // ── the pager (#819): the page splits the list it has; the server always sends it whole ──
+  var PAGE_SIZES = [25, 50, 100];
+  var PAGE_SIZE = 25;
+  // The highest page the address may name (six digits); a page past the end shows the last page.
+  var PAGE_MAX = 999999;
+  var ELLIPSIS = "…";
+
+  function perOf(n) {
+    return PAGE_SIZES.indexOf(n) >= 0 ? n : PAGE_SIZE;
+  }
+
+  /** The page numbers the pager shows: every one up to seven pages, else the first, the last and
+   *  the ones around the page shown, with an ellipsis for each gap (always seven items). */
+  function pageItems(page, pages) {
+    var out = [];
+    var i;
+    if (pages <= 7) {
+      for (i = 1; i <= pages; i++) out.push(i);
+      return out;
+    }
+    if (page <= 4) return [1, 2, 3, 4, 5, ELLIPSIS, pages];
+    if (page >= pages - 3) {
+      out = [1, ELLIPSIS];
+      for (i = pages - 4; i <= pages; i++) out.push(i);
+      return out;
+    }
+    return [1, ELLIPSIS, page - 1, page, page + 1, ELLIPSIS, pages];
+  }
+
+  /** The pager for `total` jobs at `per` a page (25, 50 or 100, else 25) on `page` (a page past
+   *  the end is the last page, anything else odd the first): which rows (start, end), "Showing
+   *  A–B of N" ("" for no jobs), whether Previous and Next can be pressed, and the page numbers. */
+  function pageModel(total, page, per) {
+    var n = typeof total === "number" && isFinite(total) && total > 0 ? Math.floor(total) : 0;
+    var size = perOf(per);
+    var pages = Math.max(1, Math.ceil(n / size));
+    var p = typeof page === "number" && isFinite(page) && page >= 1 ? Math.floor(page) : 1;
+    if (p > pages) p = pages;
+    var start = (p - 1) * size;
+    var end = Math.min(n, start + size);
+    var text = !n ? "" : "Showing " + (start + 1 === end ? end : (start + 1) + "–" + end)
+      + " of " + n;
+    return { page: p, pages: pages, per: size, total: n, start: start, end: end, text: text,
+      prev: p > 1, next: p < pages, items: pageItems(p, pages) };
+  }
+
+  /** The rows on the page `model` (pageModel) shows. */
+  function pageSlice(rows, model) {
+    return (Array.isArray(rows) ? rows : []).slice(model.start, model.end);
+  }
+
+  // ── the view in the address (#819) ──
+  // The search, the three filters, the page and the page size live in the query string, so a
+  // reload or a shared link opens the same list. The hash keeps choosing the tab (tabFromHash).
+  /** A view with every value made safe: a status that is not one of the four counts, a page that
+   *  is not a whole number from 1 to PAGE_MAX and a page size other than 25, 50 or 100 read as
+   *  their defaults; each text is cut to SEARCH_MAX. */
+  function cleanView(view) {
+    var v = view && typeof view === "object" ? view : {};
+    var text = function (x) { return typeof x === "string" ? x.slice(0, SEARCH_MAX) : ""; };
+    var page = v.page;
+    if (typeof page === "string") page = /^[1-9][0-9]{0,5}$/.test(page) ? Number(page) : 1;
+    if (typeof page !== "number" || !(page >= 1 && page <= PAGE_MAX) || Math.floor(page) !== page) {
+      page = 1;
+    }
+    var per = v.per;
+    if (typeof per === "string") per = /^(25|50|100)$/.test(per) ? Number(per) : PAGE_SIZE;
+    return { q: text(v.q), status: SUMMARY_COUNTS.indexOf(v.status) >= 0 ? v.status : "",
+      work_type: text(v.work_type), foreman: text(v.foreman), page: page, per: perOf(per) };
+  }
+
+  /** The view a query string ("?q=…&status=…&work_type=…&foreman=…&page=…&per=…") asks for.
+   *  Unknown keys are ignored, a repeated key's first value is read, junk is the default. */
+  function readView(search) {
+    var params = new URLSearchParams(String(search == null ? "" : search));
+    var raw = {};
+    VIEW_KEYS.forEach(function (k) { var x = params.get(k); if (x != null) raw[k] = x; });
+    return cleanView(raw);
+  }
+
+  /** The query string for `view` ("" for the default view), defaults left out, so a plain list
+   *  keeps a plain address. */
+  function viewQuery(view) {
+    var v = cleanView(view);
+    var parts = [];
+    FILTER_KEYS.forEach(function (k) {
+      if (v[k].trim()) parts.push(k + "=" + encodeURIComponent(v[k]));
+    });
+    if (v.page !== 1) parts.push("page=" + v.page);
+    if (v.per !== PAGE_SIZE) parts.push("per=" + v.per);
+    return parts.length ? "?" + parts.join("&") : "";
+  }
+
+  /** The query string for the address `search` with `view` written into it: the view's own keys
+   *  (VIEW_KEYS) replaced by viewQuery's, every other key kept as it was written, after them. The
+   *  page writes the view with this, so another script's keys (Connect Raken's sign-in coming back
+   *  to this page) are still in the address when that script reads them. */
+  function addressSearch(search, view) {
+    var own = viewQuery(view);
+    var kept = String(search == null ? "" : search).replace(/^\?/, "").split("&")
+      .filter(function (piece) {
+        if (!piece) return false;
+        var key = piece.split("=")[0];
+        try { key = decodeURIComponent(key.replace(/\+/g, " ")); } catch (e) { /* as written */ }
+        return VIEW_KEYS.indexOf(key) < 0;
+      });
+    if (!kept.length) return own;
+    return (own ? own + "&" : "?") + kept.join("&");
+  }
+
+  /** The view after `patch`: a change to the search, a filter or the page size goes back to page
+   *  1, so the list never sits on a page that no longer exists. `view` itself is not changed. */
+  function nextView(view, patch) {
+    var cur = cleanView(view);
+    var next = cleanView(Object.assign({}, cur, patch || {}));
+    var moved = FILTER_KEYS.concat(["per"]).some(function (k) {
+      return next[k] !== cur[k];
+    });
+    if (moved) next.page = 1;
+    return next;
+  }
+
+  /** Clear filters: no search and no filter, page 1. The page size is not a filter and stays. */
+  function clearedView(view) {
+    return cleanView({ per: cleanView(view).per });
+  }
+
+  /** Whether the search or any filter is set in `view` (Clear filters is shown then). */
+  function filtersActive(view) {
+    var v = cleanView(view);
+    return FILTER_KEYS.some(function (k) { return !!v[k].trim(); });
+  }
+
+  /** The view once a list has loaded: a Work type or Foreman the selects do not offer is dropped,
+   *  one they offer in another spelling takes theirs, and a Status is dropped while the counts are
+   *  not known (it filters nothing then, statusFilter). Dropping one is a filter change, so the
+   *  view goes back to page 1; a new spelling is not. Nothing is dropped before a job is listed. */
+  function settleView(view, data) {
+    var v = cleanView(view);
+    if (!data || !Array.isArray(data.projects) || !data.projects.length) return v;
+    var settled = { status: statusFilter(data, v.status),
+      work_type: workTypeFilter(data, v.work_type), foreman: foremanFilter(data, v.foreman) };
+    var dropped = Object.keys(settled).some(function (k) { return v[k].trim() && !settled[k]; });
+    Object.assign(v, settled);
+    if (dropped) v.page = 1;
+    return v;
+  }
+
+  /** The filters in force for `view` over the list `data`: the search, the pressed count (none
+   *  while the counts are not known, statusFilter), and the Work type and Foreman the selects
+   *  offer. What the list, its count line, its no-match line and the download all use. */
+  function viewFilters(data, view) {
+    var v = cleanView(view);
+    return { q: v.q, status: statusFilter(data, v.status), work_type: workTypeFilter(data, v.work_type),
+      foreman: foremanFilter(data, v.foreman) };
+  }
+
+  /** The three selects' options, and whether the Status one can be used: like the count buttons,
+   *  not while the counts are not known (Raken not read). */
+  function filterOptions(data) {
+    return { work_types: workTypeOptions(data), foremen: foremanOptions(data && data.projects),
+      statuses: SUMMARY_COUNTS.map(function (id) { return { value: id, label: statusLabel(id) }; }),
+      status_known: countsKnown(summaryOf(data)) };
   }
 
   /** The saved file's name: the server's (it carries the Central day the file was made), else
@@ -1003,6 +1285,13 @@
     toggleStatus: toggleStatus, statusFilter: statusFilter, countsNote: countsNote,
     lastWeekTile: lastWeekTile, budgetTile: budgetTile, listCountText: listCountText,
     noMatchText: noMatchText, downloadHref: downloadHref, downloadName: downloadName,
+    FOREMAN_NONE: FOREMAN_NONE, filterByFields: filterByFields, workTypeOptions: workTypeOptions,
+    foremanOptions: foremanOptions, workTypeFilter: workTypeFilter, foremanFilter: foremanFilter,
+    PAGE_SIZES: PAGE_SIZES, PAGE_SIZE: PAGE_SIZE, pageModel: pageModel, pageSlice: pageSlice,
+    readView: readView, viewQuery: viewQuery, addressSearch: addressSearch, nextView: nextView,
+    clearedView: clearedView,
+    filtersActive: filtersActive, settleView: settleView, viewFilters: viewFilters,
+    filterOptions: filterOptions,
     numLabel: numLabel, rakenLabel: rakenLabel, TIMING: TIMING,
     RAKEN_NOT_CONNECTED: RAKEN_NOT_CONNECTED, pvaFootText: pvaFootText, pvaEmptyText: pvaEmptyText,
     RAKEN: RAKEN, STATUS: STATUS, REASON: REASON, rakenRefreshing: rakenRefreshing,

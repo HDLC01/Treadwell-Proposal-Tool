@@ -104,6 +104,10 @@ import pull_window
 import reference_tax
 import supabase_client
 import template_versions
+from bd import api as bd_api
+from bd import web as bd_web
+from bd import weekly_worker as bd_weekly_worker
+from bd.routers import pending as bd_pending
 import verbal_intake
 
 _SUPER_ADMIN_EMAIL = (os.environ.get("SUPER_ADMIN_EMAIL") or "").strip().lower()
@@ -273,7 +277,10 @@ _AUTH_PUBLIC_PATHS = {"/healthz", "/api/public-config",
                       "/api/admin/deposit-invoice",
                       # and for the signed contract: the portal holds the signature
                       # facts, this repo holds the document generator.
-                      "/api/admin/signed-contract"}
+                      "/api/admin/signed-contract",
+                      # The BD CRM's telephony webhook (#806): the provider will prove itself with
+                      # its signature. ONE exact path; not built yet, so it answers 503.
+                      bd_pending.WEBHOOK_PATH}
 
 
 # Public for GET only. Raken sends the browser back to /api/raken/callback with no Authorization
@@ -414,11 +421,13 @@ async def _auth_gate(request: Request, call_next):
     if _auth_is_public(request.url.path, request.method):
         return await call_next(request)
     try:
-        request.state.user_email = supabase_client.verify_token(
-            request.headers.get("authorization")
-        )
+        identity = supabase_client.verify_identity(request.headers.get("authorization"))
     except supabase_client.AuthError as exc:
         return JSONResponse(status_code=exc.status, content={"ok": False, "error": exc.detail})
+    # The verified identity stays on the request: the email for the tool's own readers, and the
+    # whole of it (email, subject id, display name) for the BD CRM, which trusts this gate (#806).
+    request.state.user_email = identity["email"]
+    request.state.auth_identity = identity
     return await call_next(request)
 
 
@@ -1032,18 +1041,23 @@ def api_project_analytics() -> Dict[str, Any]:
 
 
 # The Excel download (#785): the Plan vs Actual list as it is filtered on screen, its pressed count
-# (`status`) and search text (`q`) applied by the page's own rule, built in
-# backend/plan_vs_actual_xlsx.py from the same response the GET above sends. A GET, never a write;
-# "/export" in the path puts it in the audit log with the other exports. Never a 500: any fault
-# downloads a workbook carrying a plain message instead of rows.
+# (`status`), search text (`q`) and Work type and Foreman filters (`work_type`, `foreman`, #819)
+# applied by the page's own rule, built in backend/plan_vs_actual_xlsx.py from the same response the
+# GET above sends. Every matching job: the page's pager never reaches the server. Each text is cut
+# to SEARCH_MAX, as the page cuts it. A GET, never a write; "/export" in the path puts it in the
+# audit log with the other exports. Never a 500: any fault downloads a workbook carrying a plain
+# message instead of rows.
 @app.get("/api/project-analytics/export.xlsx")
-def api_project_analytics_xlsx(q: str = "", status: str = "") -> Response:
-    q, status = q[:plan_vs_actual.SEARCH_MAX], status[:40]
+def api_project_analytics_xlsx(q: str = "", status: str = "", work_type: str = "",
+                               foreman: str = "") -> Response:
+    cap = plan_vs_actual.SEARCH_MAX
+    q, status, work_type, foreman = q[:cap], status[:40], work_type[:cap], foreman[:cap]
     today = project_calendar.today_central()
     try:
         data = plan_vs_actual.fetch()
         today = plan_vs_actual_xlsx.made_on(data, today)
-        content = plan_vs_actual_xlsx.build(data, q, status, today)
+        content = plan_vs_actual_xlsx.build(data, q, status, today, work_type=work_type,
+                                            foreman=foreman)
     except Exception as exc:  # noqa: BLE001 - the download must never 500
         log.warning("plan vs actual: workbook not built (%s)", type(exc).__name__)
         content = plan_vs_actual_xlsx.message_workbook(plan_vs_actual_xlsx.ERR_BUILD, today)
@@ -8283,6 +8297,15 @@ def _start_pva_refresh() -> None:
 
 
 @app.on_event("startup")
+def _start_bd_weekly() -> None:
+    """The BD CRM's Friday weekly-10 batch (#807, backend/bd/weekly_worker.py) runs from a startup
+    hook, never a lifespan: a lifespan would stop every hook in this file running. Only with
+    BD_WEEKLY_ENABLED and BD_ENABLED on (both default off; staging keeps the batch off). The run
+    day and hour come from BD's settings, in Central time. Never raises."""
+    bd_weekly_worker.ensure_started()
+
+
+@app.on_event("startup")
 def _start_basisboard_refresher() -> None:
     """Keep the Basisboard analytics dataset warm in the background.
 
@@ -10561,6 +10584,7 @@ def api_me(request: Request) -> Dict[str, Any]:
                 "role": role, "status": prof.get("status", "active"),
                 "nav_denied": _nav_denied_for(role, prof.get("email") or email),
                 "nav_denied_pages": _nav_denied_pages_for(role, prof.get("email") or email),
+                "nav_off": _nav_off(),
                 "grants": _grants_for(role, prof.get("email") or email)}
     # Fallback (profile row not created yet) — bootstrap super admin by email.
     role = "super_admin" if email == _SUPER_ADMIN_EMAIL else "user"
@@ -10569,6 +10593,7 @@ def api_me(request: Request) -> Dict[str, Any]:
     return {"ok": True, "email": email, "name": None, "role": role, "status": "active",
             "nav_denied": _nav_denied_for(role),
             "nav_denied_pages": _nav_denied_pages_for(role),
+            "nav_off": _nav_off(),
             "grants": _grants_for(role, "") if role == "super_admin" else []}
 
 
@@ -10644,6 +10669,19 @@ def _nav_denied_for(role: str, email: Any = "") -> List[str]:
     except Exception as exc:  # noqa: BLE001
         log.warning("nav policy unreadable for /api/me: %s", exc)
         return []
+
+
+def _nav_off() -> List[str]:
+    """The sidebar rows a switched-off feature takes out of EVERY menu, for /api/me: the BD CRM's row
+    while BD_ENABLED is off (#806, Q26).
+
+    Its own field, NOT folded into nav_denied, because it is not a denial: nobody gets a refusal card
+    for it (the server answers BD's pages and routes "not turned on" itself), it reaches admins and
+    the super admin too, and the Admin page keeps drawing the BD CRM switch so the user-role box can
+    be unticked before the switch goes on. auth.js leaves these rows out of the menu it draws for the
+    person and out of nothing else.
+    """
+    return [] if bd_web.is_enabled() else ["/bd/"]
 
 
 def _nav_denied_pages_for(role: str, email: Any = "") -> Dict[str, str]:
@@ -11287,7 +11325,7 @@ async def _root(request: Request) -> Response:
     THE PATHNAME IS THE TRAP, and the page closes it, not this function. `auth.js`
     reads `location.pathname` three times: HOME_PAGE comparisons, the DENIED_PAGES
     permission lookup, and the sidebar's active-row test in navItem(), which is an
-    `endsWith(href)` against "/portal.html". After a 307 the browser's pathname WAS
+    full-path match against "/portal.html". After a 307 the browser's pathname WAS
     "/portal.html"; served here it would be "/", and the Active Projects row would quietly
     stop being highlighted while nothing looked broken enough to investigate.
     frontend/js/root-path.js rewrites the address bar, and portal.html loads it ahead of
@@ -11343,6 +11381,30 @@ async def _gc_board(request: Request) -> Response:
     if etag in sent or "*" in sent:
         return Response(status_code=304, headers=headers)
     return Response(content=body, media_type="text/html; charset=utf-8", headers=headers)
+
+
+# ─── The BD CRM's API (#806) ──────────────────────────────────────────
+# One router, every route under /api/bd/, included AFTER every route of the tool's own so BD's
+# catch-all 404 (its last route) can never shadow one. BD's error envelope is applied by that
+# router's route class, never registered on the app. BD_ENABLED off: every /api/bd/ path answers
+# 503 "not turned on" before touching BD's database. See backend/bd/api.py.
+app.include_router(bd_api.router)
+
+
+# ─── The BD CRM's pages (#806) ────────────────────────────────────────
+# Everything under /bd/ is BD's: its pages, its scripts (bd/js/) and its one stylesheet. With
+# BD_ENABLED off, every one of those addresses answers the plain "not turned on" page (503, never
+# stored) before a byte of BD is sent. On, it is served THROUGH the static mount, exactly as every other
+# page is (no-cache with an ETag and its 304, /bd going to /bd/, the mount's 404). Declared before the
+# mount, like `_root`, so it wins for these paths. The switch is read on every request.
+@app.api_route("/bd", methods=["GET", "HEAD"], include_in_schema=False)
+@app.api_route("/bd/{rest:path}", methods=["GET", "HEAD"], include_in_schema=False)
+async def _bd_pages(request: Request, rest: str = "") -> Response:
+    if not bd_web.is_enabled():
+        return bd_web.not_turned_on_page()
+    if _frontend_files is None:                 # no frontend dir (API-only deployment)
+        raise HTTPException(404, "Frontend not available")
+    return await _frontend_files.get_response("bd/" + rest if rest else "bd", request.scope)
 
 
 if FRONTEND_DIR.exists():

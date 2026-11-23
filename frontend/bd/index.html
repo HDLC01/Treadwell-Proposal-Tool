@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>This Week · BD CRM · Treadwell</title>
+  <link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg" />
+  <!-- Warm the jsdelivr connection (DNS + TLS, no bytes) before the parser reaches the CDN script tag below. -->
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+  <!-- One light theme, like every page of the tool: no synthesized dark mode. -->
+  <meta name="color-scheme" content="only light" />
+  <link rel="stylesheet" href="/bd/bd.css" />
+</head>
+<body class="bd-app">
+  <!-- This Week (#807): the salesperson's weekly-10, BD's index.html moved in. bd-app is the BD root:
+       every rule in the BD stylesheet is scoped under it. The tool's shell draws the sidebar, with the
+       BD CRM row open on this page, and the top bar. bd-week.js fills everything below. -->
+  <main class="page wk-page" id="main">
+    <header class="page-head-row wk-head">
+      <div class="page-head">
+        <p class="eyebrow" id="wk-eyebrow">This Week</p>
+        <h1 class="page-title" id="wk-greeting">This Week</h1>
+        <p class="page-sub" id="week-sub" role="status" aria-live="polite"></p>
+      </div>
+      <div class="page-actions">
+        <div class="field wk-owner" id="owner-field" hidden>
+          <label for="owner-pick">Whose list</label>
+          <select class="select" id="owner-pick"></select>
+        </div>
+      </div>
+    </header>
+
+    <div id="live" class="sr-only" role="status" aria-live="polite"></div>
+
+    <section class="card wk-progress" id="summary" aria-label="Your progress">
+      <div class="skeleton skeleton-card"></div>
+    </section>
+
+    <div class="layout-2 wk-layout" id="wk-layout">
+      <div class="wk-main" id="wk-main">
+        <div id="lists">
+          <div class="section" id="loading" aria-hidden="true">
+            <div class="stack-lg">
+              <div class="skeleton skeleton-card"></div>
+              <div class="skeleton skeleton-card"></div>
+            </div>
+          </div>
+        </div>
+        <div id="finish"></div>
+      </div>
+      <aside class="wk-tray hide-phone" id="wk-tray" aria-labelledby="wk-tray-h" hidden></aside>
+    </div>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
+  <script src="/js/icons.js"></script>
+  <script src="/auth.js"></script>
+  <script src="/shared.js"></script>
+  <script src="/js/crm-core.js"></script>
+  <script src="/bd/js/bd-api.js"></script>
+  <script src="/bd/js/bd-shared.js"></script>
+  <script src="/bd/js/bd-core.js"></script>
+  <script src="/bd/js/bd-call.js"></script>
+  <script src="/bd/js/bd-week.js"></script>
+</body>
+</html>

@@ -9,7 +9,8 @@
 // reads a year of the Treadwell Projects calendar, groups it into Projects (Punches with their
 // jobs), keeps the ones in its window (`window_days` either side of today) and works out each one's calendar side: Deadline,
 // Workdays left, Workdays booked so far, the planned Crew size and Planned hours, all "so far" up to
-// yesterday in Central. This page only lays the rows out and filters them with the search box.
+// yesterday in Central. This page only lays the rows out, filters them (the search box and the
+// filters below) and splits them into pages.
 //
 // THE RAKEN SIDE (#782) is the server's last "Refresh now" read of Raken's time cards, set beside
 // each row: days clocked in, average on site a day, Actual hours, and the row's statuses (Behind,
@@ -40,8 +41,22 @@
 // counts are not known: each is a dash, cannot be pressed, and a line under them says why. The two
 // figure tiles are the job detail's own pair (pairHtml).
 //
-// THE DOWNLOAD (#785): "Download" fetches the list as it is filtered on screen (the search box and
-// the pressed count go as `q` and `status`) as an Excel file, a GET built on the server.
+// THE FILTERS AND THE PAGER (#819). Beside the search box, three labelled selects: Work type (the
+// server's colour-to-Work-type list and "Work type unknown"), Foreman (the list's own Foremen and
+// "No foreman") and Status. Status is the summary strip's count filter, not a second one: choosing
+// it presses the count, pressing a count sets it, "Show all jobs" and Clear filters clear both, and
+// it is disabled while the counts are not known. Everything combines (AND). Under the list, the
+// pager shows 25, 50 or 100 jobs a page; the server still sends the whole list. Any change to the
+// search, a filter or the page size goes back to page 1, and a page past the end shows the last.
+// THE VIEW (search, filters, page, page size) lives in the address's query string, written with
+// replaceState as it changes, so a reload or a shared link opens the same list; what the list does
+// not offer falls back to "All" (P.readView, P.settleView). The "#schedule" hash still picks the tab,
+// and every other key in the address is left alone: Connect Raken (js/raken-connect.js, loaded
+// after this script) comes back here with raken_code and raken_state and reads them later.
+//
+// THE DOWNLOAD (#785): "Download" fetches the list as it is filtered on screen (the search box, the
+// pressed count and the Work type and Foreman filters go as `q`, `status`, `work_type` and
+// `foreman`; never the page) as an Excel file, a GET built on the server.
 //
 // READ ONLY, with ONE write: "Refresh now" POSTs /api/project-analytics/refresh, which reads Raken
 // and keeps the result on the server. Nothing in Google Calendar or Raken is ever changed. Every
@@ -60,17 +75,14 @@
     return fetch(TW.resolveApiBase() + path, Object.assign({ headers: TW.authHeaders() }, init));
   };
 
-  const SK_Q = "tw_pva_q";
-  const ss = (k, d) => { try { const v = sessionStorage.getItem(k); return v == null ? d : v; } catch { return d; } };
-  const ssSet = (k, v) => { try { v ? sessionStorage.setItem(k, v) : sessionStorage.removeItem(k); } catch {} };
-
   const POLL_MS = 5 * 60 * 1000;
   const REFRESH_POLL_MS = 5 * 1000;    // while the server says a refresh is reading Raken
 
   let DATA = null;                     // the last good response
   let LOAD_ERR = "";                   // why the last read failed, if it did
-  let Q = ss(SK_Q, "");
-  let STATUS_F = "";                   // the count pressed in the summary strip, "" for none
+  // The list's view (#819): the search, the pressed count (`status`), the Work type and Foreman
+  // filters, the page and the page size. Read from the address; written back by writeView().
+  let VIEW = P.readView(location.search);
   let LAST_SIG = "";                   // anti-blink: skip identical repaints
   let REFRESHING = false;              // a "Refresh now" is on its way
   let FOLLOW = 0;                      // the timer polling while the server is refreshing
@@ -112,6 +124,26 @@
       .filter((x) => x && typeof x === "object");
     DATA = body;
     LOAD_ERR = "";
+    // A shared link's Work type or Foreman the list does not offer falls back to "All".
+    VIEW = P.settleView(VIEW, DATA);
+    writeView();
+  }
+
+  // ── the view in the address (#819) ────────────────────────────────
+  /** The address carries the view: replaceState, so Back is not flooded. Only the view's own keys
+   *  are rewritten (P.addressSearch); any other key and the hash (the tab) are kept as they are. */
+  function writeView() {
+    const want = location.pathname + P.addressSearch(location.search, VIEW) + location.hash;
+    if (location.pathname + location.search + location.hash !== want) {
+      try { history.replaceState(null, "", want); } catch {}
+    }
+  }
+
+  /** A change to the view: a new search, filter or page size goes back to page 1 (P.nextView). */
+  function setView(patch) {
+    VIEW = P.nextView(VIEW, patch);
+    writeView();
+    paint();
   }
 
   /** While the server says a refresh is reading Raken (someone else's press, or this one's
@@ -158,10 +190,11 @@
   }
 
   // ── the Excel download (#785) ─────────────────────────────────────
-  /** The download's address right now: the search box and the count the list is filtered by
-   *  (none while the counts are not known, as the list itself ignores a pressed count then). */
+  /** The download's address right now: the filters in force (P.viewFilters: no count while the
+   *  counts are not known, as the list itself ignores a pressed count then), never the page. */
   function downloadPath() {
-    return P.downloadHref(Q, P.statusFilter(DATA, STATUS_F));
+    const f = P.viewFilters(DATA, VIEW);
+    return P.downloadHref(f.q, f.status, f);
   }
 
   // "Download": a GET of the list as it is filtered on screen. Every /api route needs the sign-in
@@ -327,19 +360,97 @@
   /** A count pressed: show only its jobs, or every job when it was already the one pressed. The
    *  focus stays on the count pressed. */
   function setStatus(id) {
-    STATUS_F = P.toggleStatus(STATUS_F, id);
-    paint();
+    setView({ status: P.toggleStatus(VIEW.status, id) });
     focusTile(id);
   }
 
   /** "Show all jobs": clear the count filter (the search box stays), and put the focus back on the
    *  count that was pressed, since the button itself goes away. */
   function clearStatus() {
-    if (!STATUS_F) return;
-    const was = STATUS_F;
-    STATUS_F = "";
-    paint();
+    if (!VIEW.status) return;
+    const was = VIEW.status;
+    setView({ status: "" });
     focusTile(was);
+  }
+
+  // ── the filters and the pager (#819) ──────────────────────────────
+  /** Clear filters: no search and no filter, page 1 (the page size stays). The button goes away,
+   *  so the focus goes to the search box. */
+  function clearFilters() {
+    VIEW = P.clearedView(VIEW);
+    $("pva-q").value = "";
+    writeView();
+    paint();
+    $("pva-q").focus();
+  }
+
+  /** "All", then one option per value the list offers. */
+  function optionsHtml(list) {
+    return '<option value="">All</option>' + list.map((o) =>
+      '<option value="' + esc(o.value) + '">' + esc(o.label) + "</option>").join("");
+  }
+
+  let OPTS_SIG = "";                   // the options last written, so an open select is not rebuilt
+  /** The three selects show the filters in force (`f`, P.viewFilters); Status cannot be used
+   *  while the counts are not known, like the count buttons. */
+  function paintFilters(f) {
+    const o = P.filterOptions(DATA);
+    const sig = JSON.stringify([o.work_types, o.foremen, o.statuses]);
+    if (sig !== OPTS_SIG) {
+      OPTS_SIG = sig;
+      $("pva-wt").innerHTML = optionsHtml(o.work_types);
+      $("pva-fm").innerHTML = optionsHtml(o.foremen);
+      $("pva-st").innerHTML = optionsHtml(o.statuses);
+    }
+    $("pva-wt").value = f.work_type;
+    $("pva-fm").value = f.foreman;
+    $("pva-st").value = f.status;
+    $("pva-st").disabled = !o.status_known;
+    // Disabled, it points at the line under the counts that says why (paintSummary).
+    if (o.status_known) $("pva-st").removeAttribute("aria-describedby");
+    else $("pva-st").setAttribute("aria-describedby", "pva-sum-note");
+    $("pva-per").value = String(VIEW.per);
+    $("pva-clear").hidden = !P.filtersActive(f);   // what filters the list, not what the view holds
+  }
+
+  /** Previous, the page numbers (the one shown is aria-current="page"; a gap is an ellipsis) and
+   *  Next, disabled at the ends. */
+  function pagerHtml(pg) {
+    const btn = (page, label, extra) => '<button type="button" class="btn pg" data-page="'
+      + esc(page) + '"' + extra + ">" + esc(label) + "</button>";
+    return btn("prev", "Previous", pg.prev ? "" : " disabled")
+      + pg.items.map((n) => (typeof n !== "number"
+        ? '<span class="pg-gap" aria-hidden="true">' + esc(n) + "</span>"
+        : btn(n, n, ' aria-label="Page ' + esc(n) + '"'
+          + (n === pg.page ? ' aria-current="page"' : "")))).join("")
+      + btn("next", "Next", pg.next ? "" : " disabled");
+  }
+
+  // One live region speaks at a time: "M of N jobs" (#pva-count) says a search or filter change,
+  // and "Showing A–B of N" (#pva-range) is live only while the page itself moved (goPage).
+  let PAGE_MOVED = false;
+  function paintPager(pg) {
+    $("pva-pager").hidden = !pg.total;
+    $("pva-range").setAttribute("aria-live", PAGE_MOVED ? "polite" : "off");
+    $("pva-range").textContent = pg.text;
+    $("pva-pages").innerHTML = pg.total ? pagerHtml(pg) : "";
+  }
+
+  /** A pager button: "prev", "next" or a page number. A paint rebuilds the buttons, so the focus
+   *  goes back to the one pressed, or to the page shown when that one is now disabled. A pointer
+   *  click (`pointer`) also brings the top of the list back into view when it has scrolled away;
+   *  a keyboard press does not, so the focused button stays on screen. */
+  function goPage(which, pointer) {
+    const n = which === "prev" ? VIEW.page - 1 : (which === "next" ? VIEW.page + 1 : Number(which));
+    if (!(n >= 1) || n === VIEW.page) return;
+    PAGE_MOVED = true;
+    try { setView({ page: n }); } finally { PAGE_MOVED = false; }
+    const btns = Array.from($("pva-pages").querySelectorAll("[data-page]"));
+    const same = btns.find((b) => b.dataset.page === String(which) && !b.disabled);
+    const cur = btns.find((b) => b.getAttribute("aria-current") === "page");
+    if (same || cur) (same || cur).focus({ preventScroll: !!pointer });
+    const main = $("pva-main");
+    if (pointer && main.getBoundingClientRect().top < 0) main.scrollIntoView({ block: "start" });
   }
 
   /** A count tile. An unknown count (Raken not read) is a dash and the tile is disabled. */
@@ -353,14 +464,14 @@
   /** The strip: the four counts, a line saying why they fall short (or are not known), and two
    *  figure tiles drawn as the job detail's own plan-beside-Raken pair (pairHtml). */
   function paintSummary() {
-    const tiles = P.countTiles(DATA, STATUS_F);
+    const tiles = P.countTiles(DATA, VIEW.status);
     const lw = P.lastWeekTile(DATA);
     const bt = P.budgetTile(DATA);
     const note = P.countsNote(DATA);
     const box = $("pva-sum");
     box.hidden = !tiles.length;
     let html = tiles.map(countTileHtml).join("");
-    if (tiles.length && note) html += '<p class="sum-note">' + esc(note) + "</p>";
+    if (tiles.length && note) html += '<p id="pva-sum-note" class="sum-note">' + esc(note) + "</p>";
     if (tiles.length && lw) {
       html += pairHtml({ label: "Last week", sub: lw.range, plan: lw.planned,
         planSub: "Planned hours", actual: lw.actual, actualSub: "Actual hours", note: lw.note });
@@ -375,7 +486,7 @@
 
   function paint() {
     paintButton();
-    const sig = JSON.stringify([Q, STATUS_F, LOAD_ERR, DATA, DETAIL]);
+    const sig = JSON.stringify([VIEW, LOAD_ERR, DATA, DETAIL]);
     if (sig === LAST_SIG) return;
     LAST_SIG = sig;
     paintList();
@@ -425,18 +536,30 @@
     $("pva-main").hidden = false;
     paintSummary();
 
-    const st = P.statusFilter(DATA, STATUS_F);
-    const shown = P.visibleProjects(projects, Q, st);
-    $("pva-count").textContent = P.listCountText(shown.length, projects.length, Q, st);
-    $("pva-showall").hidden = !st;
+    // The filters in force: the count only while the counts are known, a Work type or Foreman only
+    // when the list offers it. Then the page of the matching jobs.
+    const f = P.viewFilters(DATA, VIEW);
+    paintFilters(f);
+    const shown = P.visibleProjects(projects, f.q, f.status, f);
+    const pg = P.pageModel(shown.length, VIEW.page, VIEW.per);
+    // A page past the end shows the last page, and the address says so. The one place a paint
+    // changes the view, on purpose: only here is the number of matching jobs known. The next paint
+    // sees a new signature, which is harmless.
+    if (pg.page !== VIEW.page) {
+      VIEW = P.nextView(VIEW, { page: pg.page });
+      writeView();
+    }
+    $("pva-count").textContent = P.listCountText(shown.length, projects.length, f.q, f.status, f);
+    $("pva-showall").hidden = !f.status;
     const body = $("pva-body");
-    body.innerHTML = shown.map(rowHtml).join("");
+    body.innerHTML = P.pageSlice(shown, pg).map(rowHtml).join("");
     paintSwatches(body);
     paintBars(body);
+    paintPager(pg);
 
     const empty = !projects.length
       ? P.pvaEmptyText(DATA)
-      : (!shown.length ? P.noMatchText(Q, st) : "");
+      : (!shown.length ? P.noMatchText(f.q, f.status, f) : "");
     $("pva-empty").textContent = empty;
     $("pva-empty").hidden = !empty;
 
@@ -633,6 +756,15 @@
     if (b) setStatus(b.dataset.st);
   });
   $("pva-showall").addEventListener("click", clearStatus);
+  $("pva-clear").addEventListener("click", clearFilters);
+  $("pva-wt").addEventListener("change", (e) => setView({ work_type: e.target.value || "" }));
+  $("pva-fm").addEventListener("change", (e) => setView({ foreman: e.target.value || "" }));
+  $("pva-st").addEventListener("change", (e) => setView({ status: e.target.value || "" }));
+  $("pva-per").addEventListener("change", (e) => setView({ per: Number(e.target.value) }));
+  $("pva-pages").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-page]");
+    if (b && !b.disabled) goPage(b.dataset.page, e.detail > 0);   // detail 0: the keyboard
+  });
   $("pva-body").addEventListener("click", (e) => {
     if (e.target.closest("a")) return;
     const tr = e.target.closest("tr[data-key]");
@@ -640,10 +772,10 @@
   });
   $("pd-back").addEventListener("click", closeDetail);
   document.addEventListener("keydown", onEscape);
-  $("pva-q").value = Q;
-  $("pva-q").addEventListener("input", (e) => { Q = e.target.value || ""; ssSet(SK_Q, Q); paint(); });
+  $("pva-q").value = VIEW.q;
+  $("pva-q").addEventListener("input", (e) => setView({ q: e.target.value || "" }));
   $("pva-q").addEventListener("keydown", (e) => {
-    if (e.key === "Escape") { e.target.value = ""; Q = ""; ssSet(SK_Q, ""); paint(); }
+    if (e.key === "Escape") { e.target.value = ""; setView({ q: "" }); }
   });
 
   const tablist = document.querySelector('[role="tablist"]');
@@ -669,6 +801,7 @@
   });
   window.addEventListener("hashchange", () => showTab(P.tabFromHash(location.hash), false));
 
+  writeView();                         // the view's junk values leave the address at once
   showTab(P.tabFromHash(location.hash), false);
   paint();
   load();

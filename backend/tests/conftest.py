@@ -12,6 +12,11 @@ import supabase_client
 
 import _memo
 
+# The BD CRM's own test setup (tests/_bd_conftest.py): its markers, its hypothesis profiles and,
+# from the database stage of #805 on, its Postgres fixtures. Kept in its own module so the BD
+# fixtures never mix with the proposal tool's.
+pytest_plugins = ["_bd_conftest"]
+
 # One REAL fill_estimate per distinct input, per process (see tests/_memo.py for what that does and
 # does not mean). Installed at import so the /api/generate route and every direct caller share it.
 _memo.install_fill_memo()
@@ -19,6 +24,9 @@ _memo.install_fill_memo()
 # Capture the REAL verifier BEFORE any test patches it (test_auth uses this to
 # exercise the genuine logic, while everything else runs with the bypass below).
 _REAL_VERIFY_TOKEN = supabase_client.verify_token
+# The gate's verify step (email, subject id and name; #806). Same idea: the real one is kept for the
+# tests that send real tokens through the gate (tests/test_bd_token_tampering.py).
+_REAL_VERIFY_IDENTITY = supabase_client.verify_identity
 
 
 # ── Never let the suite write to the production data store ────────────────────
@@ -105,6 +113,12 @@ def _bypass_auth(monkeypatch):
     gate doesn't 401 in tests that aren't exercising auth."""
     monkeypatch.setattr(supabase_client, "verify_token",
                         lambda authorization: "tester@wetreadwell.com")
+    # The gate calls verify_identity. It follows whatever verify_token is AT CALL TIME, so a test
+    # that puts the real verify_token back (or signs in as somebody else through it) still decides
+    # what the gate sees, exactly as before the gate kept the whole identity.
+    monkeypatch.setattr(supabase_client, "verify_identity",
+                        lambda authorization: {"email": supabase_client.verify_token(authorization),
+                                               "sub": None, "name": None})
 
 
 @pytest.fixture(autouse=True)
@@ -170,6 +184,12 @@ def _clear_portal_capabilities():
 def real_verify_token():
     """The genuine verify_token (un-bypassed) for the auth tests."""
     return _REAL_VERIFY_TOKEN
+
+
+@pytest.fixture
+def real_verify_identity():
+    """The genuine verify_identity, the gate's verify step (un-bypassed)."""
+    return _REAL_VERIFY_IDENTITY
 
 
 # ── strict test doubles ───────────────────────────────────────────────────────

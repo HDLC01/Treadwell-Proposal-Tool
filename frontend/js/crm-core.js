@@ -528,6 +528,11 @@
   // is scanning: "whose are these?" answered down a column without reading a single
   // name, because one person is always the same colour.
 
+  // Titles before a name and suffixes after it, which initialsOf leaves out. nameOf has
+  // already dropped their full stops ("Dr." arrives as "Dr").
+  var NAME_PREFIX = /^(dr|mr|mrs|ms|mx|miss|prof|rev)$/i;
+  var NAME_SUFFIX = /^(jr|sr|ii|iii|iv|phd|pe|md|esq),?$/i;
+
   /** "kyle.loseke@…" → "KL"; "Kyle Loseke" → "KL"; "troy@…" → "T"; "" → "".
    *
    *  Takes an address OR a display name, because half the app has one and half has the
@@ -541,9 +546,17 @@
    *  Holmes"). His COLOUR is identical on both, because that keys on the first name — and
    *  colour is what makes a column scannable. Making the initials agree too would mean
    *  every page fetching the roster before it could draw a chip, trading a correct-but-
-   *  terse label for a flash of the wrong one. */
+   *  terse label for a flash of the wrong one.
+   *
+   *  A leading title and a trailing suffix are left out ("Dr. Ian Pruitt" -> "IP",
+   *  "Ray Duchene Jr." -> "RD"), unless they are the whole name: the BD CRM's contacts
+   *  carry them, and its pages name people through this file (#806). */
   function initialsOf(who) {
-    var words = nameOf(who).split(/\s+/).filter(Boolean);
+    var all = nameOf(who).split(/\s+/).filter(Boolean);
+    var words = all.filter(function (w, i) {
+      return !(i === 0 && NAME_PREFIX.test(w)) && !(i > 0 && i === all.length - 1 && NAME_SUFFIX.test(w));
+    });
+    if (!words.length) words = all;
     if (!words.length) return "";
     var first = words[0].charAt(0);
     return (words.length > 1 ? first + words[words.length - 1].charAt(0) : first).toUpperCase();
@@ -849,6 +862,7 @@
     pausedUntil: pausedUntil,
     lostReason: lostReason, followupOff: followupOff, nameOf: nameOf,
     initialsOf: initialsOf, colorOf: colorOf, avatarHtml: avatarHtml, identityKey: identityKey,
+    byTs: byTs,
     AVATAR_COLORS: AVATAR_COLORS, AVATAR_NONE: AVATAR_NONE,
     sort: sort, isStarred: isStarred, group: group, groupHandedOff: groupHandedOff,
     scopeSendOutcome: scopeSendOutcome,

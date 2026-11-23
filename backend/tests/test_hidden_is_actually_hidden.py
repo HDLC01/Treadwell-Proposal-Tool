@@ -32,8 +32,18 @@ import re
 
 import pytest
 
+from _frontend_tree import pages, rel, write_tree
+from _page_scripts import execution_order
+
 FRONTEND = pathlib.Path(__file__).resolve().parents[2] / "frontend"
-PAGES = sorted(FRONTEND.glob("*.html"))
+
+
+def hidden_pages(frontend=FRONTEND):
+    """Every page, in every sub-folder (#804)."""
+    return pages(frontend)
+
+
+PAGES = hidden_pages()
 
 # display values that leave the element on screen. `none` and `contents` do not.
 _ON_SCREEN = re.compile(r"display\s*:\s*(?!none\b|contents\b)([a-z-]+)")
@@ -96,27 +106,47 @@ def _hideable(text):
     return out
 
 
-def _scripts_of(page_text):
-    """The js/*.js files a page loads, so JS-built markup is checked against THIS page's CSS."""
-    return [FRONTEND / s for s in re.findall(r'src="(js/[\w.-]+\.js)"', page_text)]
+def _scripts_of(page, page_text, frontend=FRONTEND):
+    """The local scripts a page loads, so JS-built markup is checked against THIS page's CSS. Resolved
+    the way the browser resolves them: "/bd/js/x.js" from the frontend folder, a relative "js/x.js"
+    from the page's own folder (#804). Another host's script is not a file here."""
+    out = []
+    for src in execution_order(page_text):
+        if src.startswith("//") or "://" in src:
+            continue
+        out.append(frontend / src.lstrip("/") if src.startswith("/") else page.parent / src)
+    return out
 
 
-@pytest.mark.parametrize("page", PAGES, ids=lambda p: p.name)
+@pytest.mark.parametrize("page", PAGES, ids=rel)
 def test_everything_marked_hidden_can_actually_be_hidden(page):
     text = page.read_text(encoding="utf-8", errors="replace")
     css = "\n".join(re.findall(r"<style[^>]*>(.*?)</style>", text, re.S))
     if not css.strip():
         pytest.skip("no author CSS on this page")
+    uniq = hidden_but_shown(page)
+    assert not uniq, "%s:\n%s" % (rel(page), "\n".join(
+        '  #%s ships `hidden` and carries .%s (display:%s, from %s) — a class rule beats the UA '
+        '`[hidden]` rule, so hiding it does nothing. Add `.%s[hidden] { display:none; }`.'
+        % (i, c, d, w, c) for w, i, c, d in uniq))
+
+
+def hidden_but_shown(page, frontend=FRONTEND):
+    """[(where, id, class, display)] for each element `page` ships hidden whose class its own CSS puts
+    on screen with nothing re-hiding it. `where` is "markup" or the script's path under `frontend`.
+    Empty when the page has no author CSS."""
+    text = page.read_text(encoding="utf-8", errors="replace")
+    css = "\n".join(re.findall(r"<style[^>]*>(.*?)</style>", text, re.S))
     guarded = _guarded(css)
     if "*" in guarded:
-        return                              # a blanket [hidden]{display:none} covers the page
+        return []                           # a blanket [hidden]{display:none} covers the page
     on_screen = _on_screen_classes(css)
 
     candidates = [("markup", e) for e in _hideable(text)]
-    for js in _scripts_of(text):
-        if js.exists():
-            candidates += [(js.name, e) for e in _hideable(js.read_text(encoding="utf-8",
-                                                                       errors="replace"))]
+    for js in _scripts_of(page, text, frontend):
+        if js.is_file():
+            candidates += [(rel(js.resolve(), frontend.resolve()),
+                            e) for e in _hideable(js.read_text(encoding="utf-8", errors="replace"))]
 
     broken = []
     for where, (el_id, classes) in candidates:
@@ -129,11 +159,7 @@ def test_everything_marked_hidden_can_actually_be_hidden(page):
         if b[1:] not in seen:
             seen.add(b[1:])
             uniq.append(b)
-
-    assert not uniq, "%s:\n%s" % (page.name, "\n".join(
-        '  #%s ships `hidden` and carries .%s (display:%s, from %s) — a class rule beats the UA '
-        '`[hidden]` rule, so hiding it does nothing. Add `.%s[hidden] { display:none; }`.'
-        % (i, c, d, w, c) for w, i, c, d in uniq))
+    return uniq
 
 
 def test_the_pager_and_the_toolbar_stay_fixed():
@@ -155,8 +181,8 @@ def test_the_scan_is_actually_looking_at_something():
     for page in PAGES:
         text = page.read_text(encoding="utf-8", errors="replace")
         total += len(_hideable(text))
-        for js in _scripts_of(text):
-            if js.exists():
+        for js in _scripts_of(page, text):
+            if js.is_file():
                 total += len(_hideable(js.read_text(encoding="utf-8", errors="replace")))
     assert total >= 30, (
         "only %d hideable elements found across %d pages — the `hidden` attribute pattern has "
@@ -167,3 +193,35 @@ def test_the_scan_is_actually_looking_at_something():
     assert "pp-pager" in _on_screen_classes(css), (
         "the stylesheet parser no longer sees .pp-pager's display, so this page passes vacuously")
     assert "pp-pager" in _guarded(css)
+
+
+def test_a_page_in_a_sub_folder_is_checked_too(tmp_path):
+    """#804: the BD CRM's pages live under /bd/. The page list is drawn from the whole tree, and a
+    page there that ships a hidden element its own CSS puts on screen is caught."""
+    write_tree(tmp_path, {
+        "bd/broken.html": '<style>.strip{display:flex}</style><div id="s" class="strip" hidden></div>',
+    })
+    found = hidden_pages(tmp_path)
+    assert [rel(p, tmp_path) for p in found] == ["bd/broken.html"]
+    assert [b[2] for b in hidden_but_shown(found[0])] == ["strip"]
+
+
+def test_a_sub_folder_page_s_own_scripts_are_read_too(tmp_path):
+    """#804: markup built in a script is checked against the CSS of the page that loads it. Pages load
+    their scripts by absolute path ("/bd/js/x.js"), so the script read is the one at that path, and a
+    relative src resolves against the page's own folder, the way a browser resolves it, never against
+    the root's js/ folder."""
+    css = '<style>.strip{display:flex}</style>'
+    built = 'el.innerHTML = `<div id="b" class="strip" hidden></div>`;'
+    write_tree(tmp_path, {
+        "bd/abs.html": css + '<script src="/bd/js/x.js?v=1"></script>',
+        "bd/js/x.js": built,
+        "bd/rel.html": css + '<script src="js/y.js"></script>',
+        "bd/js/y.js": built,
+        "js/y.js": "",                       # the root's file of the same name: not the one loaded
+        "plain.html": css + '<script src="/js/y.js"></script>',
+    })
+    found = {rel(p, tmp_path): p for p in hidden_pages(tmp_path)}
+    assert [b[0] for b in hidden_but_shown(found["bd/abs.html"], tmp_path)] == ["bd/js/x.js"]
+    assert [b[0] for b in hidden_but_shown(found["bd/rel.html"], tmp_path)] == ["bd/js/y.js"]
+    assert hidden_but_shown(found["plain.html"], tmp_path) == []

@@ -21,6 +21,7 @@ import re
 import pytest
 
 import nav_access
+from _frontend_tree import files, rel, write_tree
 
 
 @pytest.fixture(autouse=True)
@@ -216,6 +217,18 @@ def test_every_tab_owns_no_api_route_now():
     assert {h: t["api"] for h, t in nav_access.TABS.items() if t["api"]} == {}
 
 
+def test_the_bd_crm_is_one_tab_with_every_bd_page_and_no_api():
+    """#806: ONE tab for the whole of BD, hide-only (the BD API answers by BD role, Q31). Its pages
+    are every BD page, and none of them belongs to any other tab."""
+    bd = [h for h in nav_access.TABS if h.startswith("/bd")]
+    assert bd == ["/bd/"]
+    assert nav_access.TABS["/bd/"]["api"] == ()
+    assert nav_access.TABS["/bd/"]["pages"] == nav_access.BD_PAGES
+    for href, tab in nav_access.TABS.items():
+        if href != "/bd/":
+            assert not [p for p in tab["pages"] if p.startswith("/bd/")], href
+
+
 def test_the_lead_inbox_is_page_refusal_only():
     nav_access.save({"user": ["/leads.html"]}, "k@x.com")
     for path in ("/api/leads", "/api/leads/abc/body", "/api/leads/abc/status"):
@@ -252,9 +265,8 @@ def test_the_follow_ups_feed_really_is_a_single_caller_route():
     """The measurement behind the entry, re-taken here because nothing else re-takes it. If a second
     page ever reads this feed, the prefix has to come out of TABS or that page goes blank for a role
     somebody only meant to keep off the board."""
-    js = sorted(p.name for p in (FRONTEND / "js").glob("*.js")
-                if "/api/portal/followups" in p.read_text(encoding="utf-8"))
-    assert js == ["followups.js"], (
+    js = readers("/api/portal/followups")
+    assert js == ["js/followups.js"], (
         "%s also read /api/portal/followups, so the Follow-ups tab may no longer own it" % js)
 
 
@@ -277,10 +289,8 @@ def test_the_v2_estimates_feed_really_is_a_single_caller_route():
     """The measurement behind the entry, re-taken here because nothing else re-takes it. If a second
     page ever reads /api/v2/pipeline, the prefix has to come out of TABS or that page goes blank for
     a role somebody only meant to keep off the v2 board."""
-    callers = sorted(p.name for folder in (FRONTEND, FRONTEND / "js")
-                     for p in list(folder.glob("*.js")) + list(folder.glob("*.html"))
-                     if "/api/v2/pipeline" in p.read_text(encoding="utf-8"))
-    assert callers == ["v2-board.js"], (
+    callers = readers("/api/v2/pipeline")
+    assert callers == ["js/v2-board.js"], (
         "%s also read /api/v2/pipeline, so the Estimating Tool v2 tab may no longer own it" % callers)
 
 
@@ -376,9 +386,8 @@ def test_the_deposit_reveal_prefix_has_no_caller_outside_portal_js():
     Follow-ups feed's equivalent test does. It asserts the narrower, still-real thing: nothing
     OTHER than portal.js reads it. If that ever stops being true the prefix has to come out of
     TABS or some other page goes blank for a role somebody only meant to keep off the board."""
-    js = sorted(p.name for p in (FRONTEND / "js").glob("*.js")
-                if "/api/portal/deposit/" in p.read_text(encoding="utf-8"))
-    assert set(js) <= {"portal.js"}, (
+    js = readers("/api/portal/deposit/")
+    assert set(js) <= {"js/portal.js"}, (
         "%s also read /api/portal/deposit/, so the board may no longer own it" % js)
 
 
@@ -416,16 +425,13 @@ def test_a_policy_saved_under_the_tools_old_href_still_keeps_that_role_off_it():
 def test_the_two_doors_into_polish_step_two_are_still_the_two_this_assumes():
     """The reason that row owns two pages. Executed nowhere else, so it is read out of the source:
     if a third door appears, the second page is reachable past a denial and this says so."""
-    frontend = pathlib.Path(__file__).resolve().parents[2] / "frontend"
-    doors = sorted(p.name for p in list(frontend.glob("*.html")) + list((frontend / "js").glob("*.js"))
-                   if p.name not in ("auth.js", "polish-estimate.js", "polish-sandbox.js")
-                   and re.search(r'["\']/polish-estimate\.html', p.read_text(encoding="utf-8")))
+    doors = readers(POLISH_STEP_TWO_DOOR, skip=NOT_DOORS)
     # done.js and proposal-review.js joined on 2026-10-20: a v2 draft's step pills go straight to the v2 estimate rather
     # than through estimate-review.js's redirect, which was already a door to it. The page is gated where it is served
     # (page_denied), so a pill is no way past a denial.
     # generate.js joined on 2026-10-28: 3 · Generate Files points a v2 draft's Estimate pill and Back at it.
-    assert doors == ["done.js", "estimate-review.html", "estimate-review.js", "generate.js",
-                     "polish-intake.html", "polish-intake.js", "proposal-review.js"], doors
+    assert doors == ["estimate-review.html", "js/done.js", "js/estimate-review.js", "js/generate.js",
+                     "js/polish-intake.js", "js/proposal-review.js", "polish-intake.html"], doors
 
 
 def test_the_pages_with_no_sidebar_row_are_never_denied():
@@ -439,6 +445,21 @@ def test_the_pages_with_no_sidebar_row_are_never_denied():
 
 
 FRONTEND = pathlib.Path(__file__).resolve().parents[2] / "frontend"
+
+# A link to the Polish beta's step 2, and the files that are not a door to it: the sidebar, and the
+# page's own scripts. Paths under frontend/.
+POLISH_STEP_TWO_DOOR = re.compile(r'["\']/polish-estimate\.html')
+NOT_DOORS = ("auth.js", "js/polish-estimate.js", "js/polish-sandbox.js")
+
+
+def readers(needle, frontend=FRONTEND, skip=()):
+    """Every page and script, in every sub-folder (#804), that mentions `needle` (a string, or a
+    compiled pattern to search for), named by its path under frontend/ and sorted. `skip` names
+    paths to leave out."""
+    def hit(text):
+        return needle.search(text) is not None if hasattr(needle, "search") else needle in text
+    return sorted(rel(p, frontend) for p in files(".html", ".js", frontend=frontend)
+                  if rel(p, frontend) not in skip and hit(p.read_text(encoding="utf-8")))
 
 
 def _sidebar_hrefs():
@@ -460,6 +481,11 @@ def test_every_tab_in_the_table_is_a_real_page_and_every_sidebar_href_is_in_the_
     import pipelines
     for href, tab in nav_access.TABS.items():
         for page in tab["pages"]:
+            # THE BD CRM'S PAGES ARE LISTED AHEAD OF THEIR MOVE (#806): the one BD tab names every BD
+            # page so it refuses each the day it lands. They are pinned instead, to BD's eight pages,
+            # by test_bd_nav.py; a page that has moved must still be a real file.
+            if page in nav_access.BD_PAGES and not (FRONTEND / page.lstrip("/")).is_file():
+                continue
             if page in pipelines.BOARD_PAGE.values() and not (FRONTEND / page.lstrip("/")).exists():
                 assert (FRONTEND / "portal.html").is_file(), "%s is built from a missing portal.html" % page
                 continue
@@ -604,3 +630,20 @@ def test_the_store_is_safe_across_threads():
     [t.join() for t in ts]
     assert not errors, errors
     assert len(nav_access.get()["deny"].get("user", [])) == 1
+
+
+# ── the caller scans reach sub-folders (#804) ────────────────────────────────
+def test_every_caller_scan_here_sees_a_page_or_script_in_a_sub_folder(tmp_path):
+    """The BD CRM's pages and scripts live under /bd/. A second reader there of a route one tab owns
+    has to be found, named by its path under frontend/, or that tab's ownership is unchecked."""
+    write_tree(tmp_path, {
+        "js/followups.js": "fetch('/api/portal/followups')",
+        "bd/js/followups.js": "fetch('/api/portal/followups'); fetch('/api/portal/deposit/1');"
+                              " fetch('/api/v2/pipeline'); location.href = '/polish-estimate.html';",
+        "bd/index.html": '<a href="/polish-estimate.html">step 2</a>',
+        "auth.js": "location.href = '/polish-estimate.html';",
+    })
+    assert readers("/api/portal/followups", tmp_path) == ["bd/js/followups.js", "js/followups.js"]
+    assert readers("/api/v2/pipeline", tmp_path) == ["bd/js/followups.js"]
+    assert readers("/api/portal/deposit/", tmp_path) == ["bd/js/followups.js"]
+    assert readers(POLISH_STEP_TWO_DOOR, tmp_path, skip=NOT_DOORS) == ["bd/index.html", "bd/js/followups.js"]

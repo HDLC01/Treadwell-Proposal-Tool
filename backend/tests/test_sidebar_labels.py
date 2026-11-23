@@ -367,6 +367,21 @@ def test_the_sidebar_has_exactly_three_headings(sidebar):
         assert beta not in grouped["Active"], "%s leaked into the daily list" % beta
 
 
+def test_the_bd_crm_is_exactly_one_new_beta_row_with_a_glyph_of_its_own(sidebar):
+    """#806 (spec #802): ONE "BD CRM" row, first under Beta, tagged BETA, with a glyph no other row
+    uses. The Beta shelf is otherwise what it was."""
+    import re as _re
+    calls = _re.findall(r'navItem\("/bd/",\s*"([^"]+)",\s*"([^"]+)"(?:,\s*"([^"]+)")?\)', sidebar)
+    assert calls == [("users", "BD CRM", "BETA")], calls
+    beta = _re.findall(r'navItem\("([^"]+)"[^)]*"BETA"\)', sidebar)
+    assert beta == ["/bd/", "/v2-board.html", "/polish-estimates.html", "/library.html",
+                    "/markup.html"], beta
+    glyphs = [g for _, g, _ in _nav_labels(sidebar)]
+    assert glyphs.count("users") == 1, glyphs
+    icons = (FRONTEND / "js" / "icons.js").read_text(encoding="utf-8")
+    assert _re.search(r"^\s+users:\s*'", icons, _re.M), "js/icons.js has no `users` glyph to draw"
+
+
 # ── unlinked must not become deleted ──────────────────────────────────────────
 @pytest.mark.parametrize("page,script", [
     ("followup-settings.html", "/js/followup-settings.js"),

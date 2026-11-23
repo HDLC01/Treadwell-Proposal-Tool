@@ -52,6 +52,18 @@ services:
       # daily Raken allowance, and would fire in the same window as prod. QA it
       # with "Refresh now" on Project Analytics (the same step).
       - PVA_REFRESH_ENABLED=off
+      # The BD CRM's database (#805): the bd_app login on this compose's own Postgres
+      # (schema bd, made by backend/staging/schema_pg.sql). STAGING-ONLY password, never
+      # reused anywhere else; prod's BD_DATABASE_URL lives only in the prod env file.
+      - BD_DATABASE_URL=postgresql://bd_app:staging_only_bd_app_pw@db:5432/treadwell
+      # The BD CRM's switch (#806), on for staging only: its BD CRM row, its /bd/ pages and its
+      # /api/bd/ routes answer here. Off by default, so prod (whose compose file does not set it)
+      # keeps answering "not turned on" until its own cut-over (#802).
+      - BD_ENABLED=on
+      # The BD CRM's Friday weekly-10 batch (#807), OFF on staging: staging never builds batches
+      # on its own. QA it with "Run Friday batch now" on This Week (the same build). Prod's
+      # compose file leaves it unset (off) until cut-over day turns it on in the prod env.
+      - BD_WEEKLY_ENABLED=off
     env_file:
       - .env.staging                    # cloud auth keys + Dropbox + Anthropic + SUPER_ADMIN_EMAIL
     volumes:

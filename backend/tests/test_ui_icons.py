@@ -42,6 +42,8 @@ import re
 
 import pytest
 
+from _frontend_tree import pages, rel, write_tree
+
 FRONTEND = pathlib.Path(__file__).resolve().parents[2] / "frontend"
 
 # The pictographic ranges, the dingbats and geometric shapes this app had pressed into service as
@@ -185,13 +187,7 @@ def test_every_page_that_draws_the_sidebar_also_loads_the_icon_table():
     The failure is silent by design (icon() is guarded, so a missing table costs the pictures and
     not the render), which is exactly why it needs a test rather than a stack trace.
     """
-    missing = []
-    for p in sorted(FRONTEND.glob("*.html")):
-        html = p.read_text(encoding="utf-8")
-        if 'src="/auth.js"' not in html:
-            continue
-        if 'src="/js/icons.js"' not in html:
-            missing.append(p.name)
+    missing = pages_without_icon_table()
     assert not missing, (
         "these pages load auth.js but not js/icons.js, so their sidebar draws no icons: %s"
         % ", ".join(missing))
@@ -202,14 +198,32 @@ def test_the_icon_table_loads_before_the_file_that_draws_the_sidebar():
     time, so today a later icons.js would still work — and relying on that is how the load-order
     bug in test_polish_estimate_page.py got written. One rule, checkable: the table comes first.
     """
+    wrong = pages_loading_icons_late()
+    assert not wrong, "js/icons.js is loaded after auth.js on: %s" % ", ".join(wrong)
+
+
+def pages_without_icon_table(frontend=FRONTEND):
+    """Every page, in every sub-folder (#804), that loads auth.js but not js/icons.js."""
+    missing = []
+    for p in pages(frontend):
+        html = p.read_text(encoding="utf-8")
+        if 'src="/auth.js"' not in html:
+            continue
+        if 'src="/js/icons.js"' not in html:
+            missing.append(rel(p, frontend))
+    return missing
+
+
+def pages_loading_icons_late(frontend=FRONTEND):
+    """Every page, in every sub-folder (#804), that loads js/icons.js after auth.js."""
     wrong = []
-    for p in sorted(FRONTEND.glob("*.html")):
+    for p in pages(frontend):
         html = p.read_text(encoding="utf-8")
         if 'src="/auth.js"' not in html or 'src="/js/icons.js"' not in html:
             continue
         if html.index('src="/js/icons.js"') > html.index('src="/auth.js"'):
-            wrong.append(p.name)
-    assert not wrong, "js/icons.js is loaded after auth.js on: %s" % ", ".join(wrong)
+            wrong.append(rel(p, frontend))
+    return wrong
 
 
 # ── 3. the glyphs themselves keep the house geometry ──────────────────────────
@@ -281,3 +295,18 @@ def test_an_unknown_name_draws_an_empty_box_rather_than_throwing(icons_src):
     """
     assert "hasOwnProperty.call(PATHS, name) ? PATHS[name] : \"\"" in icons_src, (
         "icons.js no longer falls back to an empty glyph for an unknown name")
+
+
+# ── the page scans reach sub-folders (#804) ──────────────────────────────────
+def test_both_page_scans_see_a_page_in_a_sub_folder(tmp_path):
+    """The BD CRM's pages live under /bd/ and draw the same sidebar. A page there that loads auth.js
+    without the icon table, or after it, is named by its path under frontend/."""
+    auth, icons = '<script src="/auth.js"></script>', '<script src="/js/icons.js"></script>'
+    write_tree(tmp_path, {
+        "fine.html": icons + auth,
+        "bd/fine.html": icons + auth,
+        "bd/no-icons.html": auth,
+        "bd/late.html": auth + icons,
+    })
+    assert pages_without_icon_table(tmp_path) == ["bd/no-icons.html"]
+    assert pages_loading_icons_late(tmp_path) == ["bd/late.html"]

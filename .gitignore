@@ -119,6 +119,8 @@ Trailing 12TH MONTH.xlsx
 # backend/tests/fixtures/ is unaffected.
 /*.docx
 /*.xlsx
+# A CRM export (the BD CRM's contact lists arrive as one): real names, phones and emails.
+/*.csv
 /*.pdf
 /*.png
 /*.jpg

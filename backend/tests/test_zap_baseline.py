@@ -567,8 +567,12 @@ def test_the_tools_logged_out_surface_is_the_audited_one():
     # identity, so this GET only answers a 303 to /project-calendar.html with the code, state and
     # error renamed raken_*. It reads nothing, writes nothing and sends no mail; the exchange is the
     # admin-only POST on the same path, which the auth gate still covers.
+    # /bd and /bd/{rest:path} (2026-11-20, the BD CRM's pages #806): the static files under
+    # frontend/bd/, served through the same static mount as every other page, or, while BD_ENABLED is
+    # off, one fixed "not turned on" page. GET and HEAD only; no data, no writes, no mail. Every BD
+    # call the pages make is under /api/bd/, behind the auth gate.
     assert public == {"/", "/healthz", "/api/public-config", "/api/admin/proposal-pdf",
-                      "/gc-projects.html", "/api/raken/callback"}, sorted(public)
+                      "/gc-projects.html", "/api/raken/callback", "/bd", "/bd/{rest:path}"}, sorted(public)
 
 
 # Every GET the portal serves, and why the scan may request it. Read on 2026-09-29 from the

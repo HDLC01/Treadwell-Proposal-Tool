@@ -435,3 +435,135 @@ def test_the_caveat_beside_last_weeks_planned_hours_is_the_tiles_own(client, wor
     for w, note in zip(weeks, got):
         caveat = plan_vs_actual_xlsx._planned_caveat(w)
         assert note.endswith(" " + caveat) if caveat else "Crew size" not in note, (w, note)
+
+
+# ── the Work type and Foreman filters (#819) ──────────────────────────────────
+# Two more jobs, both Polish (Google colour 9): the Hall has no Foreman, the Yard's is "pat" in lower
+# case. With them the list holds Epoxy (the Clinic), Polish (Hall, Yard) and Work type unknown (the
+# rest), and Foremen Pat (Clinic, Gym, Yard), Sam (Depot), Lee (Annex, the Shop Punch) and none.
+HALL = mob("h", "26.506, Example Hall (2)", "2026-11-16", "2026-11-20", "9")
+YARD = mob("y", "26.507, Example Yard (3) (pat)", "2026-11-16", "2026-11-19", "9")
+
+CLINIC_ROW, DEPOT_ROW = ("26.501", "Example Clinic"), ("26.502", "Example Depot")
+ANNEX_ROW, PUNCH_ROW = ("26.503", "Example Annex"), (None, "Example Shop Punch")
+GYM_ROW, HALL_ROW, YARD_ROW = ("26.505", "Example Gym"), ("26.506", "Example Hall"), \
+    ("26.507", "Example Yard")
+
+
+@pytest.fixture
+def crews(world):
+    google, fake = world
+    google.events = google.events + [HALL, YARD]
+    return google, fake
+
+
+def test_the_work_type_and_foreman_filters_pick_the_rows(client, crews):
+    """Worked out by hand from the events above, in the server's order (Deadline, then name)."""
+    refresh(client)
+    every = [ANNEX_ROW, PUNCH_ROW, YARD_ROW, CLINIC_ROW, DEPOT_ROW, HALL_ROW, GYM_ROW]
+    assert names(download(client)[1]) == every
+    assert names(download(client, work_type="Polish")[1]) == [YARD_ROW, HALL_ROW]
+    assert names(download(client, work_type="polish")[1]) == [YARD_ROW, HALL_ROW]
+    assert names(download(client, work_type="Epoxy")[1]) == [CLINIC_ROW]
+    assert names(download(client, work_type="Work type unknown")[1]) == [
+        ANNEX_ROW, PUNCH_ROW, DEPOT_ROW, GYM_ROW]
+    assert names(download(client, foreman="Pat")[1]) == [YARD_ROW, CLINIC_ROW, GYM_ROW]
+    assert names(download(client, foreman=" LEE ")[1]) == [ANNEX_ROW, PUNCH_ROW]
+    assert names(download(client, foreman="(none)")[1]) == [HALL_ROW]
+    assert names(download(client, work_type="Polish", foreman="PAT")[1]) == [YARD_ROW]
+    assert names(download(client, work_type="Polish", status="not_linked")[1]) == [
+        YARD_ROW, HALL_ROW]
+    assert names(download(client, work_type="Work type unknown", status="behind")[1]) == [
+        DEPOT_ROW]
+    assert names(download(client, q="example", work_type="Work type unknown",
+                          foreman="Lee")[1]) == [ANNEX_ROW, PUNCH_ROW]
+    # A value the page does not offer filters nothing there, so nothing here.
+    assert names(download(client, work_type="Combo")[1]) == every
+    assert names(download(client, work_type="Polish", foreman="Juan")[1]) == [YARD_ROW, HALL_ROW]
+
+
+def test_the_summary_sheet_names_the_work_type_and_foreman_filters(client, crews):
+    refresh(client)
+    s = summary(download(client, work_type="polish", foreman="(none)")[1])
+    assert (s["Work type filter"], s["Foreman filter"]) == ("Polish", "No foreman")
+    assert (s["Jobs in the list"], s["Jobs in this file"]) == (7, 1)
+    s = summary(download(client, foreman="lee")[1])
+    assert (s["Work type filter"], s["Foreman filter"]) == ("All", "Lee")
+    s = summary(download(client, work_type="Combo", foreman="Juan")[1])
+    assert (s["Work type filter"], s["Foreman filter"]) == ("All", "All")
+
+
+def _page_rows_filtered(data, q, status, work_type, foreman):
+    """What the page lists: the filters in force for the view (P.viewFilters: the count only while
+    the counts are known, a Work type or Foreman only when the selects offer it), then
+    P.visibleProjects with all four."""
+    view = {"q": q, "status": status, "work_type": work_type, "foreman": foreman}
+    script = ("const P = require(%s);\nconst d = %s;\n"
+              "const f = P.viewFilters(d, %s);\n"
+              "const out = P.visibleProjects(d.projects, f.q, f.status, f)"
+              ".map(p => [p.job_number, p.name]);\n"
+              "console.log(JSON.stringify(out));"
+              % (json.dumps(str(CORE)), json.dumps(data), json.dumps(view)))
+    proc = subprocess.run([NODE, "-e", script], capture_output=True, text=True, encoding="utf-8",
+                          timeout=60, cwd=str(FRONTEND))
+    assert proc.returncode == 0, proc.stderr
+    return [tuple(x) for x in json.loads(proc.stdout.strip().splitlines()[-1])]
+
+
+FILTER_INPUTS = [
+    ("", "", "Polish", ""), ("", "", "POLISH ", ""), ("", "", "Epoxy", ""), ("", "", "Gyp", ""),
+    ("", "", "Work type unknown", ""), ("", "", "work type UNKNOWN", ""), ("", "", "Combo", ""),
+    ("", "", "", "Pat"), ("", "", "", "  pat  "), ("", "", "", "LEE"), ("", "", "", "(none)"),
+    ("", "", "", "( none )"), ("", "", "", "Juan"), ("", "", "Polish", "pat"),
+    ("", "behind", "Work type unknown", "sam"), ("", "not_linked", "Polish", ""),
+    ("example", "", "", "lee"), ("yard", "", "polish", "(none)"), ("", "on_plan", "Epoxy", "Pat"),
+    ("", "", "x" * 5000, "y" * 5000), ("", "", "Polish" + " " * 300 + "zzz", ""),
+    ("", "", "", "Pat" + " " * 300), ("", "", "", "\u00a0Pat\u3000"),
+    ("", "made_up", "<b>Polish</b>", "\u0000")]
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_the_page_and_the_server_list_the_same_rows_with_the_work_type_and_foreman(client, crews):
+    """The server's work_type_filter, foreman_filter and visible_projects are the page's rule
+    written once more. Same inputs, same rows, before Raken is read and after."""
+    for stage in ("before", "after"):
+        if stage == "after":
+            refresh(client)
+        data = get(client)
+        for q, status, wt, fm in FILTER_INPUTS:
+            _r, wb = download(client, q=q, status=status, work_type=wt, foreman=fm)
+            assert names(wb) == _page_rows_filtered(data, q, status, wt, fm), (
+                stage, q, status, wt[:20], fm[:20])
+
+
+def test_the_new_parameters_are_capped_and_never_500(client, crews, monkeypatch):
+    """Like `q`, each is cut to SEARCH_MAX before it is read; a long or odd value is no filter,
+    never a 500, and a fault building the list still downloads a workbook."""
+    refresh(client)
+    for params in ({"work_type": "x" * 20000}, {"foreman": "y" * 20000},
+                   {"work_type": "\u0000\ufeff", "foreman": "%00"},
+                   {"work_type": ["Polish", "Epoxy"]}):
+        r = client.get(XLSX, params=params)
+        assert r.status_code == 200, params
+    # "Polish", 300 spaces, "zzz": only "Polish" and spaces survive the 200-character cut, so the
+    # file is the Polish jobs. Uncut it would name no Work type and filter nothing.
+    _r, wb = download(client, work_type="Polish" + " " * 300 + "zzz",
+                      foreman="Pat" + " " * 300 + "zzz")
+    assert names(wb) == [YARD_ROW]
+    s = summary(wb)
+    # The Foreman is named as the list first spells it: the Yard (Deadline 19 Nov) comes before
+    # the Clinic and writes it "pat".
+    assert (s["Work type filter"], s["Foreman filter"]) == ("Polish", "pat")
+
+    def boom(*a, **k):
+        raise RuntimeError("made-up fault")
+    monkeypatch.setattr(plan_vs_actual_xlsx, "build", boom)
+    r, wb = download(client, work_type="Polish", foreman="Pat")
+    assert wb[SHEET]["A2"].value == plan_vs_actual_xlsx.ERR_BUILD
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_the_page_and_the_server_name_the_same_no_foreman_value():
+    got = run_core("out([P.FOREMAN_NONE, P.WORK_TYPE_UNKNOWN_LABEL, P.SEARCH_MAX])")
+    assert got == [plan_vs_actual.FOREMAN_NONE, plan_vs_actual.WORK_TYPE_UNKNOWN_LABEL,
+                   plan_vs_actual.SEARCH_MAX]

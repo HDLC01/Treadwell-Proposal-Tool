@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin · BD CRM · Treadwell</title>
+  <link rel="icon" type="image/svg+xml" href="/img/treadwell-bison.svg" />
+  <!-- Warm the jsdelivr connection (DNS + TLS, no bytes) before the parser reaches the CDN script tag below. -->
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+  <!-- One light theme, like every page of the tool: no synthesized dark mode. -->
+  <meta name="color-scheme" content="only light" />
+  <link rel="stylesheet" href="/bd/bd.css" />
+</head>
+<body class="bd-app">
+  <!-- BD's Admin page (#809): BD's admin.html moved in, restyled like the tool. It is BD's own, apart from
+       the proposal tool's Admin page (/admin.html), and changes BD logins only. bd-admin.js shows each
+       section only to the people whose can allows it and fills it; a section nobody may see stays hidden
+       and is never asked for. -->
+  <main class="page ad-page" id="main">
+    <header class="page-head">
+      <p class="eyebrow">BD CRM</p>
+      <h1 class="page-title" id="ad-title" tabindex="-1">Admin</h1>
+      <p class="page-sub">BD CRM settings. The proposal tool's own Admin page is unchanged.</p>
+    </header>
+
+    <div id="ad-note" hidden></div>
+
+    <div class="ad-navbar" id="ad-navbar" hidden>
+      <nav class="tabs ad-nav" id="ad-nav" aria-label="Admin sections">
+        <a href="#ad-s-users" data-sec="ad-s-users">People</a>
+        <a href="#ad-s-friday" data-sec="ad-s-friday">Friday list</a>
+        <a href="#ad-s-rules" data-sec="ad-s-rules">Goals</a>
+        <a href="#ad-s-lists" data-sec="ad-s-lists">Pick lists</a>
+        <a href="#ad-s-phone" data-sec="ad-s-phone">Phone</a>
+        <a href="#ad-s-imports" data-sec="ad-s-imports">Imports</a>
+      </nav>
+    </div>
+
+    <section class="card ad-sec" id="ad-s-users" aria-labelledby="ad-h-users" hidden>
+      <div class="card-head">
+        <h2 id="ad-h-users">People</h2>
+        <button type="button" class="btn" id="ad-add-jump">Add a person</button>
+      </div>
+      <p class="ad-sub-text ad-meta">Who can open the BD CRM is set on the proposal tool's Admin page. Here you set what they do in it.</p>
+      <div id="ad-users"><div class="skeleton skeleton-card"></div></div>
+    </section>
+
+    <section class="card ad-sec" id="ad-s-friday" aria-labelledby="ad-h-friday" hidden>
+      <div class="card-head"><h2 id="ad-h-friday">Friday list</h2></div>
+      <div id="ad-friday"><div class="skeleton skeleton-card"></div></div>
+    </section>
+
+    <section class="card ad-sec" id="ad-s-rules" aria-labelledby="ad-h-rules" hidden>
+      <div class="card-head"><h2 id="ad-h-rules">Goals and what counts</h2></div>
+      <div id="ad-rules"><div class="skeleton skeleton-card"></div></div>
+    </section>
+
+    <section class="card ad-sec" id="ad-s-lists" aria-labelledby="ad-h-lists" hidden>
+      <div class="card-head"><h2 id="ad-h-lists">Pick lists</h2></div>
+      <div id="ad-lists"><div class="skeleton skeleton-card"></div></div>
+    </section>
+
+    <section class="card ad-sec" id="ad-s-phone" aria-labelledby="ad-h-phone" hidden>
+      <div class="card-head"><h2 id="ad-h-phone" tabindex="-1">Phone system</h2><span id="ad-phone-status"></span></div>
+      <div id="ad-phone"><div class="skeleton skeleton-card"></div></div>
+    </section>
+
+    <section class="card ad-sec" id="ad-s-imports" aria-labelledby="ad-h-imports" hidden>
+      <div class="card-head">
+        <h2 id="ad-h-imports">Past imports</h2>
+        <button type="button" class="btn" id="ad-import">Import a workbook</button>
+        <input type="file" id="ad-import-file" accept=".xlsx,.csv" hidden aria-label="Choose the workbook to import" />
+      </div>
+      <div id="ad-imports"><div class="skeleton skeleton-card"></div></div>
+    </section>
+  </main>
+
+  <!-- Attach a call that matched no contact. bd-admin.js opens it with BD.sheet (the focus trap and
+       the inert page behind it are bd-shared.js's). -->
+  <form class="dialog ad-dlg ad-dlg-form" id="ad-attach" aria-labelledby="ad-attach-title" novalidate hidden>
+    <div class="ad-dlg-head">
+      <h2 class="dialog-title" id="ad-attach-title">Attach the call to a contact</h2>
+      <button type="button" class="btn btn-icon" data-close aria-label="Close"></button>
+    </div>
+    <div class="ad-dlg-body">
+      <p class="dialog-text" id="ad-attach-call"></p>
+      <div class="field">
+        <label for="ad-attach-q">Find the contact</label>
+        <input class="input input-search" id="ad-attach-q" name="q" type="search" autocomplete="off" placeholder="Name, company or phone" />
+      </div>
+      <div class="field" id="ad-attach-pick">
+        <div class="ad-results" id="ad-attach-results" role="radiogroup" aria-label="Pick the contact"></div>
+        <span class="sr-only" id="ad-attach-status" aria-live="polite"></span>
+      </div>
+      <div class="field">
+        <label for="ad-attach-outcome">How the call went</label>
+        <select class="select" id="ad-attach-outcome" name="outcome">
+          <option value="answered">We talked</option>
+          <option value="voicemail">Voicemail</option>
+          <option value="no_answer">Nobody talked</option>
+        </select>
+        <span class="field-hint">Only a call where you talked counts toward the yearly goal.</span>
+      </div>
+      <div class="field">
+        <label class="check"><input type="checkbox" id="ad-attach-save" name="save_number" aria-describedby="ad-attach-save-hint" /> <span id="ad-attach-save-label">Save this number on the contact</span></label>
+        <span class="field-hint" id="ad-attach-save-hint"></span>
+      </div>
+    </div>
+    <div class="dialog-actions">
+      <button type="button" class="btn" data-close>Cancel</button>
+      <button type="submit" class="btn btn-primary" id="ad-attach-yes">Attach call</button>
+    </div>
+  </form>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0" integrity="sha384-NNePyabYRaJyedI6EQAY7SV5Z8/0sQkuQ5WVfhKm0H+j0KSugkI2ZMNzw/QtzAWz" crossorigin="anonymous"></script>
+  <script src="/js/icons.js"></script>
+  <script src="/auth.js"></script>
+  <script src="/shared.js"></script>
+  <script src="/js/crm-core.js"></script>
+  <script src="/bd/js/bd-api.js"></script>
+  <script src="/bd/js/bd-shared.js"></script>
+  <script src="/bd/js/bd-core.js"></script>
+  <script src="/bd/js/bd-admin.js"></script>
+</body>
+</html>
