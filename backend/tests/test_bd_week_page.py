@@ -33,7 +33,7 @@ FRONTEND = pathlib.Path(__file__).resolve().parents[2] / "frontend"
 HARNESS = pathlib.Path(__file__).resolve().parent / "js" / "bd" / "bd-page-harness.js"
 PAGE = FRONTEND / "bd" / "index.html"
 IDS = ["main", "wk-eyebrow", "wk-greeting", "week-sub", "live", "summary", "wk-layout", "wk-main", "lists",
-       "finish", "wk-tray", "owner-field", "owner-pick"]
+       "finish", "wk-tray", "owner-field", "owner-pick", "wk-due-banner"]
 MORNING = "2026-11-04T09:30:00-06:00"
 CONTACTS = "/bd/contacts.html"
 
@@ -497,3 +497,153 @@ def test_the_manager_sees_the_company_score_and_nothing_to_press(tmp_path):
 def test_a_long_company_name_goes_in_as_text(tmp_path):
     html = company_run(tmp_path)["els"]["lists"]["html"]
     assert "Juniper Hollow Dental &amp; Orthodontics" in html and "Dental & Orthodontics" not in html
+
+
+
+# ── the maintenance banner at the top of This Week ────────────────────────────────────────────────
+# Hanz asked for "a banner for maintenance accounts", at the top of This Week: when the list being
+# looked at has open "Due now" rows (WeekView due_count, companies), a banner under the page header and
+# above the progress card says how many and offers Show, which takes focus to the first due row.
+BANNER = "wk-due-banner"
+STAYS = "They stay on the list until you log a call, meeting, email or text."
+OSAGE = {"id": 18, "name": "Osage Plains Brewing"}
+BLUESTEM = {"id": 22, "name": "Bluestem Logistics"}
+
+
+def due_week(n_due, with_ten=True):
+    """Avery's week with `n_due` maintenance companies due (Kaw Valley, Osage Plains, Bluestem: one row
+    each, the server's order, due_count n_due) and, `with_ten`, Dana's open follow-up as the 10.
+    Without the 10 it is a week with no Friday list: "No list yet", with only the pins on it."""
+    out = empty_week()
+    w = out["body"]["week"]
+    pins = {"id": 210, "kind": "ten_more", "owner": {"id": 1, "name": "Avery Quill"}, "week_start": "2026-11-02",
+            "generated_at": "2026-11-04T09:00:00-06:00"}
+    friday = {"id": 201, "kind": "friday", "owner": {"id": 1, "name": "Avery Quill"}, "week_start": "2026-11-02",
+              "generated_at": "2026-10-30T16:00:00-05:00"}
+    w["batch"] = friday if with_ten else None
+    w["batches"] = ([friday] if with_ten else []) + [pins]
+    people = [(301, 30, "Hal Brecken", KAW, "785-555-0110"), (331, 31, "Nora Lindqvist", OSAGE, "785-555-0111"),
+              (332, 33, "Odell Pruitt", BLUESTEM, "785-555-0113")][:n_due]
+    tasks = []
+    for tid, cid, name, co, phone in people:
+        t = task(tid, "maintenance", "open", cid, name, co, "Plant Manager", phone,
+                 reasons=["Follow-up was due Fri, Oct 30"], category="maintenance")
+        t["batch_id"] = 210
+        tasks.append(t)
+    rows = [row_of(t, "due") for t in tasks]
+    if with_ten:
+        dana = task(302, "followup", "open", 21, "Dana Whitlow", PRAIRIE, "Project Manager", "913-555-0101", score=82,
+                    reasons=["Key account"], importance=3)
+        tasks.append(dana)
+        rows.append(row_of(dana, "ten"))
+    w["tasks"], w["rows"] = tasks, rows
+    w["due_count"], w["total"] = n_due, 1 if with_ten else 0
+    return out
+
+
+def banner_run(tmp_path, week, who=None, name="banner", search=""):
+    require_node()
+    users = {"status": 200, "body": {"ok": True, "total": 1, "items": [
+        {"id": 1, "name": "Avery Quill", "role": "salesperson"}]}}
+    sc = {"scripts": ["js/crm-core.js"] + page_scripts(), "token": "tok", "ready": True,
+          "bdMe": who or me("Avery Quill", "salesperson"), "now": MORNING, "ids": IDS, "search": search,
+          "responses": {"GET /api/bd/week": week, "GET /api/bd/settings": settings(), "GET /api/bd/users": users}}
+    f = tmp_path / ("%s.json" % name)
+    f.write_text(json.dumps(sc), encoding="utf-8")
+    proc = run_node(HARNESS, FRONTEND, f)
+    assert proc.returncode == 0, proc.stderr[-3000:]
+    out = last_json_line(proc.stdout)
+    assert out["threw"] is None, out["threw"]
+    return out
+
+
+def banner_absent(out):
+    b = out["els"][BANNER]
+    return b["hidden"] is True and b["html"] == ""
+
+
+def show_button(html):
+    m = re.search(r'<button[^>]*data-act="show-due"[^>]*>(.*?)</button>', html)
+    assert m, html
+    return m.group(0), words(m.group(1))
+
+
+def test_the_banner_is_in_the_page_between_the_header_and_the_progress_card_and_starts_hidden():
+    """Hidden until a week with something due is drawn: never there while the page loads."""
+    html = PAGE.read_text(encoding="utf-8")
+    tag = re.search(r'<section[^>]*id="wk-due-banner"[^>]*>', html).group(0)
+    assert re.search(r"\shidden[\s>]", tag), tag
+    assert 'aria-labelledby="wk-due-banner-h"' in tag, tag
+    at = html.index('id="wk-due-banner"')
+    assert html.index("</header>") < at < html.index('id="summary"'), "under the page header, above the progress card"
+
+
+def test_one_maintenance_account_due_shows_the_banner_and_show_goes_to_next_up(tmp_path):
+    out = banner_run(tmp_path, due_week(1))
+    b = out["els"][BANNER]
+    assert b["hidden"] is False
+    text = words(b["html"])
+    assert "1 maintenance account due this week" in text and "accounts" not in text, text
+    assert STAYS in text, text
+    assert re.search(r'<h2[^>]*id="wk-due-banner-h"[^>]*>1 maintenance account due this week</h2>', b["html"]), b["html"]
+    tag, label = show_button(b["html"])
+    assert label == "Show" and 'data-target="wk-next"' in tag and 'type="button"' in tag, tag
+    # Next up is the due row, and it can take focus (Show moves focus there).
+    nxt = re.search(r'<section[^>]*id="wk-next"[^>]*>', out["els"]["lists"]["html"]).group(0)
+    assert 'tabindex="-1"' in nxt, nxt
+    # The progress card's own line stays.
+    assert "Due now: 1 maintenance account" in words(out["els"]["summary"]["html"])
+    # The first paint announces nothing: only a change after it is said.
+    assert "maintenance" not in out["els"]["live"]["text"], out["els"]["live"]["text"]
+
+
+def test_several_due_says_accounts_and_the_due_now_heading_can_take_focus(tmp_path):
+    out = banner_run(tmp_path, due_week(3), name="three")
+    b = out["els"][BANNER]
+    assert b["hidden"] is False
+    assert re.search(r'id="wk-due-banner-h"[^>]*>3 maintenance accounts due this week</h2>', b["html"]), b["html"]
+    tag, _ = show_button(b["html"])
+    assert 'data-target="wk-next"' in tag, "Next up is the first due row"
+    head = re.search(r'<h2[^>]*id="wk-due-h"[^>]*>', out["els"]["lists"]["html"]).group(0)
+    assert 'tabindex="-1"' in head, head
+    assert "Due now: 3 maintenance accounts" in words(out["els"]["summary"]["html"])
+
+
+def test_a_week_with_no_list_yet_but_something_due_shows_the_banner(tmp_path):
+    out = banner_run(tmp_path, due_week(2, with_ten=False), name="nolist")
+    assert "No list yet" in words(out["els"]["summary"]["html"])
+    b = out["els"][BANNER]
+    assert b["hidden"] is False
+    assert "2 maintenance accounts due this week" in words(b["html"]), words(b["html"])
+
+
+@pytest.mark.parametrize("which", ["nothing-due", "no-list-yet"])
+def test_no_banner_when_nothing_is_due(tmp_path, which):
+    week = week_with_dana() if which == "nothing-due" else empty_week()
+    out = banner_run(tmp_path, week, name=which)
+    assert banner_absent(out), out["els"][BANNER]
+
+
+def test_no_banner_when_the_week_does_not_load(tmp_path):
+    down = {"status": 503, "body": {"ok": False, "error": "unavailable", "message": "The BD database is not answering."}}
+    out = banner_run(tmp_path, down, name="down")
+    assert "The BD database is not answering." in out["els"]["lists"]["text"]
+    assert banner_absent(out), out["els"][BANNER]
+
+
+def test_no_banner_without_bd_access_or_before_a_manager_picks_a_list(tmp_path):
+    refused = run(tmp_path, {"status": 403, "body": {"ok": False, "error": "forbidden", "message": "No BD role."}},
+                  name="refused")
+    assert banner_absent(refused), refused["els"][BANNER]
+    chooser = banner_run(tmp_path, due_week(1), who=me("Devon Hale", "manager", uid=4), name="chooser")
+    assert "Whose week?" in chooser["els"]["lists"]["text"]
+    assert banner_absent(chooser), chooser["els"][BANNER]
+
+
+@pytest.mark.parametrize("role", ["manager", "admin"])
+def test_a_manager_or_admin_looking_at_a_list_sees_its_banner(tmp_path, role):
+    out = banner_run(tmp_path, due_week(1), who=me("Devon Hale", role, uid=4), name=role, search="?owner=1")
+    b = out["els"][BANNER]
+    assert b["hidden"] is False and "1 maintenance account due this week" in words(b["html"])
+    tag, label = show_button(b["html"])
+    assert label == "Show", "Show only moves focus, so a read-only viewer has it too"

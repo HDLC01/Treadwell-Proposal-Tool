@@ -613,6 +613,22 @@
 .bd-app .wk-live { margin-top: 10px; font-size: 13px; color: var(--bd-ink-2); }
 .bd-app .wk-due-line { display: inline-flex; margin-top: 10px; padding: 3px 10px; border-radius: var(--bd-r-pill);
   background: var(--bd-warn-bg); color: var(--bd-warn); font-size: 13px; font-weight: 600; line-height: 1.35; }
+/* The maintenance banner above the progress card: the components' .banner (the caution ground and ink
+   of the "Maintenance · due" pill, the card radius), the main column's full width. The words take
+   the room and Show sits at the end; on a narrow screen Show wraps under the words. */
+.bd-app .wk-due-banner { flex-wrap: wrap; align-items: center; gap: 10px 12px; margin-bottom: 14px; padding: 12px 16px; }
+.bd-app .wk-due-banner-ico { display: inline-flex; flex: none; align-self: flex-start; margin-top: 1px; }
+.bd-app .wk-due-banner .wk-due-banner-ico .tw-ico { margin-top: 0; }
+.bd-app .wk-due-banner-text { flex: 1 1 220px; min-width: 0; }
+.bd-app .wk-due-banner-title { font-size: 15px; font-weight: 700; line-height: 1.35; color: inherit; overflow-wrap: anywhere; }
+.bd-app .wk-due-banner-sub { margin-top: 2px; font-size: 14px; font-weight: 500; line-height: 1.4; color: inherit; }
+.bd-app .wk-due-banner-show { flex: none; margin-left: auto; }
+@media (max-width: 767px) {
+  /* The icon keeps its words beside it (20px icon + 12px gap); Show takes the next line. */
+  .bd-app .wk-due-banner-text { flex-basis: calc(100% - 32px); }
+}
+/* Show scrolls a due row to the top: clear of the tool's fixed top bar (52px). */
+.bd-app #wk-next, .bd-app #wk-due-h { scroll-margin-top: 68px; }
 .bd-app .wk-choices { display: flex; flex-wrap: wrap; gap: 8px; }
 .bd-app .wk-choices .btn { min-width: 140px; }
 @container wk-prog (min-width: 640px) {
