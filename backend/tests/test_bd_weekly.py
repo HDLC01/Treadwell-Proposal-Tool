@@ -34,7 +34,8 @@ THE FIXTURE SEED, worked by hand with bd/priority.py's rules:
     -> 31 (maintenance) first, then the BD side by score: 21, 27, 23, 25.
   On WED NOV 4 (the seed day) Dana (Nov 2) and Priya (Nov 3) are still cooling off, and 30, 21, 25
   are on this week's list, so Give Me 10 More finds 31 (due, first), 27 (68), 23 (58), then nobody.
-  Blair (2) owns 22, 24, 26, 28, 33, none ever reached or confirmed: 48 each, new, by id.
+  Blair (2) owns 22, 24, 26, 28, 33, none ever reached or confirmed: 48 each, new, by id. 22 and 33
+  are both at Prairie Ridge Builders, Inc. (company 11), which takes one slot (#828): 22's.
 """
 import datetime as dt
 import json
@@ -403,19 +404,20 @@ def test_the_friday_build_on_the_fixture_seed(bd_seeded, bd_db, bd_today):
 def test_blairs_friday_build_on_the_fixture_seed(bd_seeded, bd_db, bd_today):
     res = weekly.build_batch(bd_db, BLAIR, bd_today("2026-11-06"))
     assert [(r["contact_id"], r["kind"], r["score"]) for r in _tasks(bd_db, res["batch"]["id"])] == [
-        (22, "new", 48), (24, "new", 48), (26, "new", 48), (28, "new", 48), (33, "new", 48)]
+        (22, "new", 48), (24, "new", 48), (26, "new", 48), (28, "new", 48)]
     assert res["snoozed"] == 1                       # 304; 305 was already snoozed
 
 
 # Data built in the test: a salesperson with `n_new` never-reached contacts and `n_follow` last
-# talked to on 2025-11-04 (a year before: the cadence is capped at 40). Everyone is confirmed and of
-# importance 1, so every score is 40 and only the kinds differ.
+# talked to on 2025-11-04 (a year before: the cadence is capped at 40), each at a company of their own
+# (the split counts companies, #828). Everyone is confirmed and of importance 1, so every score is 40
+# and only the kinds differ.
 def _salesperson(db, n_new, n_follow):
     uid = db.execute("insert into bd.users (email, name, role) values ('pat.test@example.com',"
                      " 'Pat Test', 'salesperson') returning id").fetchone()["id"]
-    co = db.execute("insert into bd.companies (name, normalized_name) values ('Test Supply Co',"
-                    " 'test supply co') returning id").fetchone()["id"]
     for k in range(n_new + n_follow):
+        co = db.execute("insert into bd.companies (name, normalized_name) values (%s, %s) returning id",
+                        ("Test Supply Co %d" % k, "test supply co %d" % k)).fetchone()["id"]
         cid = db.execute("insert into bd.contacts (company_id, name, phone, email, category, owner_id,"
                          " confirmed) values (%s, %s, %s, %s, 'bd', %s, true) returning id",
                          (co, "Person %d" % k, "816-555-01%02d" % k, "person%d@example.com" % k,
@@ -667,7 +669,7 @@ def test_run_due(bd_seeded, bd_db, bd_today):
     assert weekly.run_due(bd_db, "2026-11-06T15:59:00-06:00") == []
     built = weekly.run_due(bd_db, "2026-11-06T16:00:00-06:00")
     assert [(b["owner_id"], b["week_start"], b["tasks_created"]) for b in built] == [
-        (AVERY, D("2026-11-09"), 5), (BLAIR, D("2026-11-09"), 5)]
+        (AVERY, D("2026-11-09"), 5), (BLAIR, D("2026-11-09"), 4)]
     assert weekly.run_due(bd_db, "2026-11-06T16:05:00-06:00") == []
     assert weekly.run_due(bd_db, "2026-11-07T10:00:00-06:00") == []
 

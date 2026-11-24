@@ -17,12 +17,27 @@ NOT AI. Nothing here calls the model; the score is the rule table in priority.py
 PURE RULES (no database)
     task_kind(contact) -> "maintenance" | "new" | "followup"
     rank_contacts(contacts, facts_by_id, today) -> [Pick]     best first, excluded ones left out
+    rank_companies(contacts, facts_by_id, companies, today, busy=()) -> [Pick]   one per company (#828)
+    members(company picks) -> [Pick]                          the people who get the tasks
     pick_weekly(ranked, n_new=5, n_follow=5) -> [Pick]        the Friday split
     pick_next(ranked, n=10) -> [Pick]                         "Give Me 10 More"
     should_run(now, last_run_week, run_day="friday", run_hour=16, enabled=True) -> date | None
     facts_from_ids(ids) -> {id: {"has_open_task": True}}
 
     Pick = {"contact_id", "contact", "kind", "score", "reason", "reasons"}   (BDCore toTask)
+    company Pick = a Pick of the company's person suggested first, plus "company_id" and "members"
+                   (the Picks that become its tasks: that one person, or every due maintenance person)
+
+THE WEEKLY 10 IS TEN COMPANIES (#828). The builds rank companies, not people (rank_companies): every
+BD person is scored by the rules below with the COMPANY's misses and 3-day rest laid over their own
+(company_facts.score_facts; a due maintenance person keeps their own, as before), a company already on
+the list being built is left out whole, and each company takes ONE pick: its best person (the first
+of the ranking), with the company's kind ("new" only when nobody there has had a live talk,
+company_facts.company_kind) and its chip worded for the company (company_facts.reason_words). A company with a due
+maintenance person is a maintenance row: every due person there gets their own pinned task (the
+cycle is still per person) and the company takes no BD slot. pick_weekly and pick_next then work on
+these company picks unchanged, so the 5 + 5 split and "the next 10" count companies. The per-person
+rules (rank_contacts, pick_weekly, pick_next) are BDCore's and stay checked against bd-core.js.
 
 THE ORDER (rankContacts), two tiers that never mix:
     1. DUE MAINTENANCE (kind "maintenance": a maintenance contact whose follow-up is due, the
@@ -44,6 +59,8 @@ DATABASE (psycopg 3 connection with dict rows; every build runs in ONE transacti
 savepoint when the caller already has one; run_due builds each owner in its own, see there)
     load_owned(conn, owner, today) -> [contacts_summary row]   the owner's contacts, not archived
     load_facts(conn, owner, week_start, any_status) -> facts_by_id   ONE query per batch
+    load_busy(conn, owner, week_start, any_status) -> (facts_by_id, company ids)   the same, with companies
+    rank_owned(conn, owner, day, week_start, any_status) -> [company Pick]   what the builds rank
     rank(conn, owner, today, facts_by_id=None) -> [Pick]
     build_batch(conn, owner, today, kind="friday", week_start=None, force=False, settings=None)
     ten_more(conn, owner, today, n=10)
@@ -71,6 +88,9 @@ THE FACTS (priority.py's second argument), loaded by load_facts in one query:
                       LATER week's list (next week's Friday batch, built on Friday at 16:00, so a
                       press on Friday evening or the weekend never doubles a name). api.js
                       tenMore `skip`.
+    Both, per company (#828): a company where anyone has such a task is left out of the BD picks
+                      whole (load_busy). A due maintenance person keeps the per-person fact, so
+                      each due person there still gets their own pin.
     No quote fact: last_quote_date is the contact's own column (see priority.py).
 
 THE ROLLOVER (api.js runWeekly), done by build_batch(kind="friday") BEFORE it picks: every OPEN
@@ -93,7 +113,7 @@ import logging
 from collections.abc import Iterator
 from typing import Any
 
-from . import appsettings, bizdate, errors, paging, priority, serialize
+from . import appsettings, bizdate, company_facts, errors, paging, priority, serialize
 
 RUN_DAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 # The run builds NEXT week's list and its rollover closes this week's open tasks, so it may only
@@ -207,6 +227,58 @@ def pick_next(ranked: list[dict], n: Any = None) -> list:
     return list(ranked[:TEN_MORE_COUNT if n is None else int(n)])
 
 
+def _company_key(c: Any) -> Any:
+    """The company a contact belongs to; a hand-built contact with none is a company of its own."""
+    co = (c or {}).get("company_id")
+    return co if co is not None else ("contact", c["id"])
+
+
+def rank_companies(contacts: Any, facts_by_id: Any, companies: Any, today: Any, busy: Any = ()) -> list:
+    """The company picks (#828), best first, as rank_contacts orders people: due maintenance companies
+    first (in the order of their most overdue person), then the BD companies by their best person's
+    score, then that person's id. `companies` is company_facts.load's {company_id: Facts} (a company
+    missing from it is scored on its people's own facts and takes its best person's kind); `busy` the
+    ids of companies already on the list being built (every BD person there is left out)."""
+    companies = companies or {}
+    busy = set(busy or ())
+    facts: dict = {}
+    for c in contacts or []:
+        key = _company_key(c)
+        f = company_facts.score_facts(companies.get(key), task_kind(c))
+        own = _facts_for(facts_by_id, c["id"])
+        if task_kind(c) != "maintenance" and key in busy:
+            own["has_open_task"] = True
+        f.update(own)
+        facts[c["id"]] = f
+    out: list = []
+    groups: dict = {}
+    ranked = rank_contacts(contacts, facts, today)
+    for r in ranked:                         # the due maintenance people: every one, grouped
+        if r["kind"] != "maintenance":
+            continue
+        key = _company_key(r["contact"])
+        if key in groups:
+            groups[key]["members"].append(r)
+            continue
+        groups[key] = dict(r, company_id=key, members=[r])
+        out.append(groups[key])
+    for r in ranked:                         # then each other company once: its best person
+        key = _company_key(r["contact"])
+        if r["kind"] == "maintenance" or key in groups:
+            continue
+        kind = company_facts.company_kind(companies[key]) if key in companies else r["kind"]
+        reasons = company_facts.reason_words(r["reasons"], r["contact"], companies.get(key))
+        best = dict(r, kind=kind, reasons=reasons, reason=priority.reason_text(reasons))
+        groups[key] = dict(best, company_id=key, members=[best])
+        out.append(groups[key])
+    return out
+
+
+def members(picks: list[dict]) -> list:
+    """The person Picks of company picks, in order: the tasks a build inserts."""
+    return [m for p in picks for m in p.get("members", [p])]
+
+
 def weekly_settings(settings: Any) -> dict:
     """The `weekly` Settings with the defaults filled in: new_count, followup_count, run_day,
     run_hour, enabled."""
@@ -317,12 +389,28 @@ def load_facts(conn: Any, owner: Any, week_start: Any, any_status: bool) -> dict
     query: {contact_id: {"has_open_task": True}}. any_status=False counts OPEN tasks only (the
     Friday batch); True counts every task of that week, plus every OPEN task on a later week's
     list (Give Me 10 More)."""
+    return load_busy(conn, owner, week_start, any_status)[0]
+
+
+def load_busy(conn: Any, owner: Any, week_start: Any, any_status: bool) -> tuple:
+    """load_facts, and the ids of the companies those people are at now, in one query:
+    (facts_by_id, {company_id}). rank_companies leaves a busy company out of the BD picks whole."""
     rows = conn.execute(
-        "select distinct t.contact_id from tasks t join task_batches b on b.id = t.batch_id"
+        "select distinct t.contact_id, c.company_id from tasks t join task_batches b on b.id = t.batch_id"
+        " join contacts c on c.id = t.contact_id"
         " where b.owner_id = %(owner)s and ((b.week_start = %(ws)s and (%(any)s or t.status = 'open'))"
         " or (%(any)s and b.week_start > %(ws)s and t.status = 'open'))",
         {"owner": _owner_id(owner), "ws": bizdate.parse_date(week_start), "any": bool(any_status)}).fetchall()
-    return facts_from_ids(r["contact_id"] for r in rows)
+    return facts_from_ids(r["contact_id"] for r in rows), {r["company_id"] for r in rows}
+
+
+def rank_owned(conn: Any, owner: Any, day: _dt.date, week_start: Any, any_status: bool) -> list:
+    """rank_companies over the owner's people as of `day` (call inside _transaction), with the facts
+    of the list for the week starting `week_start` (load_busy) and their companies' facts."""
+    people = load_owned(conn, owner, day)
+    facts, busy = load_busy(conn, owner, week_start, any_status)
+    companies = company_facts.load(conn, {p["company_id"] for p in people})
+    return rank_companies(people, facts, companies, day, busy)
 
 
 def rank(conn: Any, owner: Any, today: Any, facts_by_id: Any = None) -> list:
@@ -383,11 +471,12 @@ def build_batch(conn: Any, owner: Any, today: Any, kind: str = "friday", week_st
     `force` (then that batch is marked replaced, and the open tasks of every Friday batch of
     that week, replaced earlier or not, are snoozed). The rollover runs first, then every due
     maintenance contact of the owner gets a task, then the BD split from settings.weekly
-    (new_count / followup_count) is made over the BD contacts. A batch with no tasks is still created
-    when nobody is left (tasks_created 0), as the mock does.
+    (new_count / followup_count) is made over the BD companies, one person each (rank_companies). A
+    batch with no tasks is still created when nobody is left (tasks_created 0), as the mock does.
 
-    Returns {"batch": BATCH_SELECT row (serialize.task_batch makes the TaskBatch), "picks": [Pick],
-    "tasks_created": int, "snoozed": int (tasks the rollover closed), "replaced": [batch ids]}."""
+    Returns {"batch": BATCH_SELECT row (serialize.task_batch makes the TaskBatch), "picks": [Pick]
+    (one per task, in task order), "tasks_created": int, "snoozed": int (tasks the rollover closed),
+    "replaced": [batch ids]}."""
     if kind == "ten_more":
         return ten_more(conn, owner, today)
     if kind != "friday":
@@ -417,9 +506,8 @@ def build_batch(conn: Any, owner: Any, today: Any, kind: str = "friday", week_st
             {"ws": ws, "owner": owner_id, "all": [r["id"] for r in fridays]}).rowcount
         if old:
             conn.execute("update task_batches set replaced_at = bd_now() where id = any(%s)", (old,))
-        facts = load_facts(conn, owner_id, ws, any_status=False)
-        picks = pick_weekly(rank_contacts(load_owned(conn, owner_id, day), facts, day),
-                            w["new_count"], w["followup_count"])
+        picks = members(pick_weekly(rank_owned(conn, owner_id, day, ws, any_status=False),
+                                    w["new_count"], w["followup_count"]))
         from psycopg.errors import UniqueViolation
 
         try:
@@ -432,17 +520,17 @@ def build_batch(conn: Any, owner: Any, today: Any, kind: str = "friday", week_st
 
 
 def ten_more(conn: Any, owner: Any, today: Any, n: Any = TEN_MORE_COUNT) -> dict:
-    """"Give Me 10 More" (api.js tenMore): a ten_more batch for `today`'s week of the next `n` of the
-    ranking (due maintenance first, then by score), leaving out anyone on this week's lists in any state, anyone still open on a later
-    week's list (next week's Friday batch exists from Friday 16:00) and anyone tried in the last
+    """"Give Me 10 More" (api.js tenMore): a ten_more batch for `today`'s week of the next `n`
+    COMPANIES of the ranking (due maintenance first, then by score; rank_companies), leaving out any
+    company with someone on this week's lists in any state or still open on a later week's list (next
+    week's Friday batch exists from Friday 16:00), and any company where anyone was tried in the last
     3 days. Raises NothingLeft when nobody is left. No rollover. Returns the build_batch shape."""
     owner_id = _owner_id(owner)
     day = _day(today)
     ws = bizdate.week_start(day)
     with _transaction(conn, day):
         _lock_owner(conn, owner_id)
-        facts = load_facts(conn, owner_id, ws, any_status=True)
-        picks = pick_next(rank_contacts(load_owned(conn, owner_id, day), facts, day), n)
+        picks = members(pick_next(rank_owned(conn, owner_id, day, ws, any_status=True), n))
         if not picks:
             raise NothingLeft(owner_id, ws)
         batch = _insert_batch(conn, owner_id, ws, "ten_more", picks)

@@ -28,7 +28,9 @@ THE FIXTURE SEED ON FRIDAY 6 NOV 2026, worked by hand (bd/priority.py's rules, s
     -> 31, 21, 27, 23, 25: five tasks.
   Blair (2) owns 22, 24, 26, 28, 33: none ever reached (26's text and 28's email are not live
     talks or tries), none confirmed: 40 + 8 = 48 each, new, ties by id. The rollover snoozes 304.
-    -> 22, 24, 26, 28, 33: five tasks.
+    22 (Rory) and 33 (D. Whitlow) are both at Prairie Ridge Builders, Inc., and a company takes one
+    slot (#828): 22, the lower id, takes it.
+    -> 22, 24, 26, 28: four tasks.
   Gale (7) is a turned-off salesperson: no batch. Nobody else is a salesperson.
 """
 from __future__ import annotations
@@ -42,7 +44,7 @@ from bd import weekly_worker
 
 AVERY, BLAIR, EMERY = 1, 2, 5
 AVERYS_LIST = [31, 21, 27, 23, 25]
-BLAIRS_LIST = [22, 24, 26, 28, 33]
+BLAIRS_LIST = [22, 24, 26, 28]
 FRIDAY_16 = "2026-11-06T16:00:00-06:00"
 
 
@@ -235,7 +237,7 @@ def test_at_friday_16_one_batch_per_salesperson_and_none_after_a_restart(friday,
     # Built at the pinned moment, 16:00 CST = 22:00 UTC.
     assert {b[2].isoformat() for b in _batches(bd_db, "2026-11-09")} == {"2026-11-06T22:00:00+00:00"}
     assert [(b["owner_id"], b["tasks_created"], str(b["week_start"])) for b in w.built] == [
-        (AVERY, 5, "2026-11-09"), (BLAIR, 5, "2026-11-09")]
+        (AVERY, 5, "2026-11-09"), (BLAIR, 4, "2026-11-09")]
     # The rollover closed last week's open tasks: 301, 302 (Avery) and 304 (Blair).
     rows = bd_db.execute("select id, status, snoozed_until from bd.tasks where id between 301 and 305"
                          " order by id").fetchall()

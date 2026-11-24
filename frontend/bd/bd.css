@@ -95,6 +95,9 @@
   --bd-z-callbar: 9990;
 
   --bd-gutter: 28px;
+  /* The side column beside a page's main one (This Week's tray, a contact's side cards): 320px up to a
+     laptop's width, growing with a wide window to 480px so the width is used, not just stretched. */
+  --bd-side: clamp(320px, 22vw, 480px);
 }
 @media (max-width: 767px) {
   .bd-app { --bd-hit: 48px; --bd-gutter: 16px; }
@@ -126,7 +129,10 @@
 
 /* == components == */
 /* ── layout ─────────────────────────────────────────────────────────────────────────────── */
-.bd-app .page { max-width: 1180px; margin: 0; padding: 22px var(--bd-gutter) 64px; }
+/* The whole width beside the tool's sidebar, like the tool's CRM board (portal.html's .wrap): no column
+   cap, so a wide monitor is not a column on the left with empty paper to its right. What reads as text
+   (notes, empty states, hints) keeps its own measure; dialogs and sheets keep their own sizes. */
+.bd-app .page { margin: 0; padding: 22px var(--bd-gutter) 64px; }
 .bd-app .page-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 18px; }
 .bd-app .page-head-row { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
 .bd-app .page-head-row .page-head { margin-bottom: 0; }
@@ -140,7 +146,7 @@
 .bd-app .section-head > :last-child:not(:first-child):not(.section-meta) { margin-left: auto; }
 .bd-app .section-title { margin: 0 0 12px; font-size: 18px; font-weight: 600; line-height: 1.3; color: var(--bd-ink); }
 .bd-app .section-meta { font-size: 14px; color: var(--bd-ink-2); }
-.bd-app .layout-2 { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 24px; align-items: start; }
+.bd-app .layout-2 { display: grid; grid-template-columns: minmax(0, 1fr) var(--bd-side); gap: 24px; align-items: start; }
 .bd-app .wrap-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .bd-app .scroll-row { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; max-width: 100%; overflow-x: auto;
   overscroll-behavior-x: contain; scrollbar-width: thin; -webkit-overflow-scrolling: touch; }
@@ -551,6 +557,17 @@
 .bd-app .bd-import-kv dt { color: var(--bd-ink-2); }
 .bd-app .bd-import-kv dd { margin: 0; min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
 .bd-app .bd-import-errors { margin: 6px 0 0; padding-left: 18px; color: var(--bd-ink-2); font-size: 13px; }
+
+/* A collapsible BD account row's building, name and chevron, one look on Contacts (#810) and This
+   Week (#828): BD.coIconHTML / BD.coChevHTML inside the row's toggle, whose aria-expanded="true"
+   draws them open. Each page keeps only its own layout rules. */
+.bd-app .bd-co-ico { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 38px; height: 38px;
+  border-radius: 9px; color: var(--bd-ink-2); background: var(--bd-recessed); border: 1px solid var(--bd-line); }
+.bd-app [aria-expanded="true"] > .bd-co-ico { color: var(--bd-link); background: var(--bd-nav-active); border-color: transparent; }
+.bd-app .bd-co-name { font-size: 14.5px; font-weight: 700; line-height: 1.3; overflow-wrap: anywhere; }
+.bd-app .bd-co-chev { display: inline-flex; flex: none; color: var(--bd-ink-2); transition: transform .15s var(--bd-ease); }
+.bd-app [aria-expanded="true"] > .bd-co-chev { color: var(--bd-link); transform: rotate(90deg); }
+
 /* == end: components == */
 
 /* == page: week == */
@@ -605,7 +622,7 @@
 }
 
 /* ── the two columns ────────────────────────────────────────────────────────────────────── */
-.bd-app .wk-layout { grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; margin-top: 14px; }
+.bd-app .wk-layout { grid-template-columns: minmax(0, 1fr) var(--bd-side); gap: 16px; margin-top: 14px; }
 .bd-app .wk-layout.wk-solo { grid-template-columns: minmax(0, 1fr); }
 @media (max-width: 1099px) { .bd-app .wk-layout, .bd-app .wk-layout.wk-solo { grid-template-columns: minmax(0, 1fr); } }
 .bd-app .wk-main { container: wk-main / inline-size; min-width: 0; }
@@ -627,7 +644,7 @@
 .bd-app .wk-next-name a:hover { color: var(--bd-ink); text-decoration: underline; text-underline-offset: 3px; }
 .bd-app .wk-next-open { margin-top: auto; align-self: flex-start; font-size: 13px; }
 .bd-app .wk-next-name { font-size: 17px; font-weight: 700; line-height: 1.3; color: var(--bd-ink); overflow-wrap: anywhere; }
-.bd-app .wk-next-meta { margin-top: 2px; font-size: 13px; line-height: 1.45; color: var(--bd-ink-2); }
+.bd-app .wk-next-meta { margin-top: 2px; font-size: 13px; line-height: 1.45; color: var(--bd-ink-2); overflow-wrap: anywhere; }
 .bd-app .wk-meta-narrow { display: none; }
 .bd-app .wk-meta-narrow > span { display: block; }
 .bd-app .wk-next-reason { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 14px; font-weight: 500; color: var(--bd-ink); }
@@ -638,9 +655,13 @@
 .bd-app .wk-call { white-space: nowrap; }
 .bd-app .wk-next-phone { margin-top: 12px; font-size: 15px; font-weight: 600; color: var(--bd-ink); }
 .bd-app .wk-next-side { display: none; flex-direction: column; gap: 4px; min-width: 0; padding-left: 16px; border-left: 1px solid var(--bd-line); font-size: 13px; }
-.bd-app .wk-next-label2 { font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--bd-ink-2); }
+.bd-app .wk-next-label2 { font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--bd-ink-2); overflow-wrap: anywhere; }
 .bd-app .wk-next-when { font-size: 13px; font-weight: 600; color: var(--bd-ink); }
 .bd-app .wk-next-sum { margin-top: 4px; font-size: 13px; color: var(--bd-ink-2); }
+.bd-app .wk-next-fact { margin-top: 2px; font-size: 13px; color: var(--bd-ink-2); overflow-wrap: anywhere; }
+/* the others at Next up's company (#828), under the card */
+.bd-app .wk-next-also { grid-column: 1 / -1; min-width: 0; padding-top: 12px; border-top: 1px solid var(--bd-line); }
+.bd-app .wk-next-also .wk-people { margin-top: 4px; }
 @container wk-main (min-width: 640px) {
   .bd-app .wk-next { grid-template-columns: minmax(0, 1fr) 230px; }
   .bd-app .wk-next-side { display: flex; }
@@ -655,18 +676,48 @@
 .bd-app .wk-end .wk-ten, .bd-app .wk-end .wrap-row { margin-top: 8px; }
 
 /* ── rows: Rest of your 10, an extra 10, next week's preview ────────────────────────────── */
-.bd-app .wk-list .wk-row {
-  display: grid; grid-template-columns: 40px minmax(0, 1fr) auto;
-  grid-template-areas: "av who call" "av pill call" "av reason call";
+/* One company a row (#828): its head is the old row's grid, with the company's toggle (the building,
+   the name, the person to call first and the company's misses) where the avatar and name were; the
+   people sit under it, hidden until it is opened (the Contacts page's company rows, #810). */
+.bd-app .wk-list .wk-row.wk-co { display: block; min-height: 0; padding: 0; }
+.bd-app .wk-co-head {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "who call" "pill call" "reason call";
   align-items: start; gap: 4px 12px; min-height: 64px; padding: 12px 16px;
 }
-.bd-app .wk-row > .avatar { grid-area: av; }
-.bd-app .wk-who { grid-area: who; min-width: 0; color: var(--bd-ink); text-decoration: none; }
-/* a name opens the contact page (#808) */
-.bd-app .wk-who:hover { color: var(--bd-ink); }
-.bd-app .wk-who:hover .who-name { text-decoration: underline; text-underline-offset: 3px; }
-.bd-app .wk-who .who-name { font-size: 14px; }
-.bd-app .wk-who .who-sub { font-size: 13px; }
+.bd-app .wk-co-toggle { grid-area: who; display: flex; align-items: flex-start; gap: 12px; min-width: 0; min-height: var(--bd-hit);
+  padding: 0; border: 0; background: none; color: var(--bd-ink); font: inherit; text-align: left; cursor: pointer; }
+.bd-app .wk-co-toggle.is-static { cursor: default; }
+.bd-app .wk-co-toggle:focus-visible { outline-offset: 2px; }
+.bd-app .wk-co-main { display: flex; flex: 1 1 auto; flex-direction: column; gap: 1px; min-width: 0; }
+.bd-app .wk-co-first { font-size: 13px; line-height: 1.4; color: var(--bd-ink-2); overflow-wrap: anywhere; }
+.bd-app .wk-co-misses { font-size: 12.5px; font-weight: 600; line-height: 1.4; color: var(--bd-warn); }
+.bd-app .wk-co-toggle > .bd-co-chev { align-self: center; }
+.bd-app .wk-co-body { padding: 4px 16px 12px 68px; background: var(--bd-paper); border-top: 1px solid var(--bd-line); }
+.bd-app .wk-co-foot { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 10px; }
+.bd-app .wk-co-note { padding-top: 10px; font-size: 13px; color: var(--bd-ink-2); }
+/* a person on a row (opened, or under Next up) */
+.bd-app .wk-person { display: grid; grid-template-columns: 32px minmax(0, 1fr) minmax(0, 1.2fr) auto;
+  grid-template-areas: "av who facts acts"; align-items: center; gap: 4px 12px; padding: 10px 0; }
+.bd-app .wk-person + .wk-person { border-top: 1px dashed var(--bd-line); }
+.bd-app .wk-person > .avatar { grid-area: av; }
+.bd-app .wk-p-who { grid-area: who; display: flex; flex-direction: column; min-width: 0; }
+.bd-app .wk-p-name { font-size: 14px; font-weight: 600; color: var(--bd-ink); overflow-wrap: anywhere; }
+.bd-app a.wk-p-name { text-decoration: none; }
+.bd-app a.wk-p-name:hover { color: var(--bd-ink); text-decoration: underline; text-underline-offset: 3px; }
+.bd-app .wk-p-sub { font-size: 13px; color: var(--bd-ink-2); overflow-wrap: anywhere; }
+.bd-app .wk-p-facts { grid-area: facts; display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 13px;
+  line-height: 1.4; color: var(--bd-ink-2); overflow-wrap: anywhere; }
+.bd-app .wk-p-flag { display: block; margin-top: 2px; }
+.bd-app .wk-p-acts { grid-area: acts; display: flex; align-items: center; gap: 4px; }
+@media (max-width: 767px) {
+  .bd-app .wk-co-body { padding: 4px 12px 12px; }
+  .bd-app .wk-person { grid-template-columns: 32px minmax(0, 1fr) auto; grid-template-areas: "av who acts" "av facts facts";
+    align-items: start; }
+  .bd-app .wk-co-toggle { gap: 10px; }
+  .bd-app .wk-co-toggle > .bd-co-ico { width: 32px; height: 32px; }
+  .bd-app .wk-co-foot .btn { flex: 1 1 auto; }
+}
 .bd-app .wk-reason { grid-area: reason; min-width: 0; font-size: 13px; font-weight: 400; color: var(--bd-ink-2); line-height: 20px; text-wrap: pretty; }
 .bd-app .wk-pill { grid-area: pill; min-width: 0; }
 .bd-app .wk-pill:empty, .bd-app .wk-reason:empty { display: none; }
@@ -682,8 +733,8 @@
 .bd-app .wk-next-score { margin-top: 10px; }
 .bd-app .wk-nophone { font-size: 13px; color: var(--bd-ink-2); }
 @media (min-width: 768px) {
-  .bd-app .wk-list .wk-row { grid-template-columns: 40px minmax(0, 1fr) auto auto;
-    grid-template-areas: "av who call more" "av pill call more" "av reason call more"; }
+  .bd-app .wk-co-head { grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-areas: "who call more" "pill call more" "reason call more"; }
 }
 /* A row with no phone number on a phone: its More button takes the call column ("No phone" has no
    button to sit beside), so the row can still be taken off, marked done or flagged. */
@@ -691,45 +742,62 @@
   .bd-app .wk-row-nophone .wk-row-call { display: none; }
   .bd-app .wk-row-nophone .wk-row-more { grid-area: call; }
 }
-/* A middle column (520-719: beside the tray, or a tablet): name and company on the left, the pill
-   over the reason on the right, two lines a row instead of four. */
+/* A middle column (520-719: beside the tray, or a tablet): the company on the left, the pill over
+   the reason on the right, two lines a row instead of four. The company side takes 1.8 parts so a
+   name like "Prairie Ridge Builders LLC" stays on one line in Linux's wider DejaVu Sans too. */
 @container wk-main (min-width: 520px) and (max-width: 719.98px) {
-  .bd-app .wk-list .wk-row {
-    grid-template-columns: 40px minmax(0, 1fr) minmax(0, 1fr) 44px 44px;
-    grid-template-areas: "av who pill call more" "av who reason call more";
+  .bd-app .wk-co-head {
+    grid-template-columns: minmax(0, 1.8fr) minmax(0, 1fr) 44px 44px;
+    grid-template-areas: "who pill call more" "who reason call more";
     align-items: center; gap: 2px 12px; padding: 10px 16px;
   }
-  .bd-app .wk-list .wk-row.is-readonly { grid-template-columns: 40px minmax(0, 1fr) minmax(0, 1fr) minmax(104px, auto);
-    grid-template-areas: "av who pill call" "av who reason call"; }
+  .bd-app .wk-co.is-readonly > .wk-co-head { grid-template-columns: minmax(0, 1.8fr) minmax(0, 1fr) minmax(104px, auto);
+    grid-template-areas: "who pill call" "who reason call"; }
   .bd-app .wk-pill { align-self: end; }
   .bd-app .wk-reason { align-self: start; }
   .bd-app .wk-pill .pill { margin: 0; }
   .bd-app .wk-pill:empty + .wk-reason { grid-row: 1 / span 2; align-self: center; }
   /* Two pills ("Maintenance . due" and a status pill) side by side need a wider right half. */
-  .bd-app .wk-list .wk-row.wk-row-two { grid-template-columns: 40px minmax(0, 0.8fr) minmax(0, 1.2fr) 44px 44px; }
-  .bd-app .wk-list .wk-row.wk-row-two.is-readonly { grid-template-columns: 40px minmax(0, 0.8fr) minmax(0, 1.2fr) minmax(104px, auto); }
+  .bd-app .wk-row-two > .wk-co-head { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 44px 44px; }
+  .bd-app .wk-row-two.is-readonly > .wk-co-head { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(104px, auto); }
   /* When the two pills do not fit side by side the second one drops under the first, whole. */
   .bd-app .wk-row-two .wk-pill { display: flex; flex-wrap: wrap; gap: 4px; }
   .bd-app .wk-row-two .wk-pill .pill + .pill { margin-left: 0; }
 }
 @container wk-main (min-width: 720px) {
-  .bd-app .wk-list .wk-row {
-    grid-template-columns: 40px minmax(0, 1.15fr) minmax(0, 1fr) 140px 44px 44px;
-    grid-template-areas: "av who reason pill call more";
+  .bd-app .wk-co-head {
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) 140px 44px 44px;
+    grid-template-areas: "who reason pill call more";
     align-items: center; gap: 0 12px; min-height: 64px; padding: 10px 16px;
   }
-  .bd-app .wk-list .wk-row.is-readonly { grid-template-columns: 40px minmax(0, 1.15fr) minmax(0, 1fr) 140px minmax(104px, auto);
-    grid-template-areas: "av who reason pill call"; }
+  .bd-app .wk-co.is-readonly > .wk-co-head { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) 140px minmax(104px, auto);
+    grid-template-areas: "who reason pill call"; }
   .bd-app .wk-reason { line-height: 1.4; }
   .bd-app .wk-pill .pill { margin: 0; }
+  .bd-app .wk-co-toggle { align-items: center; }
+}
+/* A wide main column (1000 and up: a big screen once the page fills it, #837): the company and the
+   Next up card keep a readable width and the room left goes to the reason and LAST LIVE TALK, so
+   nothing floats in the middle at 1920 or 2560. */
+@container wk-main (min-width: 1000px) {
+  .bd-app .wk-next { grid-template-columns: minmax(0, 620px) minmax(230px, 1fr); }
+  .bd-app .wk-co-head { grid-template-columns: minmax(0, 460px) minmax(0, 1fr) 180px 44px 44px; }
+  .bd-app .wk-co.is-readonly > .wk-co-head { grid-template-columns: minmax(0, 460px) minmax(0, 1fr) 180px minmax(104px, auto); }
+  .bd-app .wk-person { grid-template-columns: 32px minmax(0, 380px) minmax(0, 1fr) auto; }
 }
 
 /* done and taken off */
 .bd-app .wk-list .wk-row.wk-done-row {
-  grid-template-columns: 40px minmax(0, 1fr) auto; grid-template-areas: "av who undo" "av outcome undo";
-  align-items: center; gap: 2px 12px; min-height: 56px;
+  display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; grid-template-areas: "av who undo" "av outcome undo";
+  align-items: center; gap: 2px 12px; min-height: 56px; padding: 12px 16px;
 }
-.bd-app .wk-done-row > .avatar { opacity: .55; }
+.bd-app .wk-done-row > .avatar { grid-area: av; opacity: .55; }
+/* a done row's company, and its people (each a link to their contact page) */
+.bd-app .wk-who { grid-area: who; min-width: 0; color: var(--bd-ink); }
+.bd-app .wk-who .who-name { font-size: 14px; overflow-wrap: anywhere; }
+.bd-app .wk-who .who-sub { font-size: 13px; overflow-wrap: anywhere; }
+.bd-app .wk-who .who-sub a { color: var(--bd-ink-2); text-decoration: none; }
+.bd-app .wk-who .who-sub a:hover { color: var(--bd-ink); text-decoration: underline; text-underline-offset: 3px; }
 .bd-app .wk-outcome { grid-area: outcome; font-size: 13px; color: var(--bd-ink-2); }
 .bd-app .wk-undo { grid-area: undo; }
 @container wk-main (min-width: 520px) {
@@ -817,6 +885,7 @@
   .bd-app .wk-dots .dots-row { gap: 4px; }
   .bd-app .wk-layout { margin-top: 14px; gap: 16px; }
   .bd-app .wk-next { padding: 14px; gap: 0; }
+  .bd-app .wk-next-also { margin-top: 14px; }
   .bd-app .wk-next-kind-top { display: inline-flex; }
   .bd-app .wk-next-kind { display: none; }
   .bd-app .wk-meta-wide { display: none; }
@@ -864,7 +933,8 @@
 .bd-app .call-fu { margin-bottom: 8px; }
 .bd-app .call-fu-title { margin-bottom: 10px; font-size: 15px; font-weight: 600; color: var(--bd-ink); }
 .bd-app .call-fu-title .opt { font-weight: 400; }
-.bd-app .call-seg { display: flex; width: 100%; flex-wrap: nowrap; }
+/* three choices, so a wide card does not stretch them into a bar across the page; a phone's card is narrower */
+.bd-app .call-seg { display: flex; width: 100%; max-width: 480px; flex-wrap: nowrap; }
 .bd-app .call-seg > button { flex: 1 1 0; min-width: 0; }
 .bd-app .call-fu-none, .bd-app .call-fu-done { margin-top: 12px; font-size: 13px; color: var(--bd-ink-2); }
 .bd-app .call-fu-done { display: flex; align-items: center; gap: 6px; color: var(--bd-ok); font-weight: 600; }
@@ -913,7 +983,7 @@
 .bd-app .ct-tidy { margin-bottom: 18px; }
 .bd-app .ct-tidy-title { margin: 0 0 10px; font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
   color: var(--bd-ink-2); }
-.bd-app .ct-tidy-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+.bd-app .ct-tidy-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 260px)); gap: 10px; }
 .bd-app .ct-tidy-card { display: flex; align-items: center; gap: 10px; min-height: var(--bd-hit); padding: 10px 12px; text-align: left;
   color: var(--bd-ink); background: var(--bd-card); border: 1px solid var(--bd-line); border-radius: var(--bd-r); cursor: pointer; }
 .bd-app .ct-tidy-card:hover { border-color: var(--bd-ink-3); }
@@ -999,11 +1069,7 @@
 .bd-app .ct-acct-toggle { flex: 1 1 auto; min-width: 0; min-height: 62px; padding: 12px 0 12px 14px; color: var(--bd-ink); text-align: left;
   background: none; border: 0; cursor: pointer; }
 .bd-app .ct-acct-toggle:focus-visible { outline-offset: -2px; }
-.bd-app .ct-acct-ico { display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 38px; border-radius: 9px;
-  color: var(--bd-ink-2); background: var(--bd-recessed); border: 1px solid var(--bd-line); }
-.bd-app .ct-acct.is-open .ct-acct-ico { color: var(--bd-link); background: var(--bd-nav-active); border-color: transparent; }
 .bd-app .ct-acct-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.bd-app .ct-acct-name { font-size: 14.5px; font-weight: 700; line-height: 1.3; overflow-wrap: anywhere; }
 .bd-app .ct-acct-meta { font-size: 12px; color: var(--bd-ink-2); }
 .bd-app .ct-phone-only { display: none; }
 .bd-app .ct-flags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
@@ -1012,14 +1078,34 @@
 .bd-app .ct-owner { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bd-app .ct-plus { font-weight: 600; color: var(--bd-ink-2); }
 .bd-app .ct-none { color: var(--bd-ink-2); }
-.bd-app .ct-chev { display: inline-flex; color: var(--bd-ink-2); transition: transform .15s var(--bd-ease); }
-.bd-app .ct-acct.is-open .ct-chev { color: var(--bd-link); transform: rotate(90deg); }
 .bd-app .ct-more, .bd-app .ct-more-gap { flex: none; width: 36px; }
 .bd-app .ct-more[aria-expanded="true"] { color: var(--bd-ink); background: var(--bd-recessed); }
+
+/* A wide window (1440 and up): People, Owner and Last live talk grow with the window as well, so the
+   account name has the most room but the columns spread across the row instead of bunching at its
+   right end. Below 1440 the columns are as they were.
+   The widths are in vw, not fr, so an open account's contact rows (a different box: indented 66px,
+   ending 15px from the card's edge, with a 40px call button and 12px gaps) can line their Status and
+   Last live talk cells up under the Owner and Last live talk headings. Measured from the card's right
+   edge: the headings and the account row end 49px in (1px border, 8px padding, the 36px "more" button
+   and its 4px gap), then the 18px chevron and a 14px gap; the contact row ends 15px in, then the 40px
+   call button and a 12px gap. So the row's last column is 14px wider than the heading's, and its status
+   column is 2px wider than Owner (a 12px gap against 14px). */
+@media (min-width: 1440px) {
+  .bd-app #ct-list { --ct-w-people: max(96px, 8vw); --ct-w-owner: max(200px, 16vw); --ct-w-last: max(112px, 11vw); }
+  .bd-app .ct-colhead, .bd-app .ct-acct-toggle {
+    grid-template-columns: 38px minmax(0, 1fr) var(--ct-w-people) var(--ct-w-owner) var(--ct-w-last) 18px; }
+  .bd-app .ct-colhead { padding-right: 49px; }
+}
 
 .bd-app .ct-people { padding: 4px 14px 4px 66px; background: var(--bd-paper); border-top: 1px solid var(--bd-line); }
 .bd-app .ct-person { display: grid; grid-template-columns: minmax(0, 1.4fr) 116px minmax(0, 1.3fr) minmax(0, 1fr) 96px 40px; gap: 12px;
   align-items: center; padding: 9px 0; font-size: 13px; }
+/* 1440 and up: Status and Last live talk sit under their headings (the widths are worked out above) */
+@media (min-width: 1440px) {
+  .bd-app .ct-person {
+    grid-template-columns: minmax(0, 1.4fr) 116px minmax(0, 1.3fr) calc(var(--ct-w-owner) + 2px) calc(var(--ct-w-last) + 14px) 40px; }
+}
 .bd-app .ct-person + .ct-person { border-top: 1px dashed var(--bd-line); }
 .bd-app .ct-person.is-match { margin: 0 -10px; padding: 9px 10px; border-radius: var(--bd-r); background: var(--bd-warn-bg); }
 .bd-app .ct-person.is-match + .ct-person { border-top-color: transparent; }
@@ -1195,7 +1281,8 @@
   background: var(--bd-recessed); color: var(--bd-ink-2); }
 .bd-app .cd-tl-ico.is-touch { background: var(--bd-ok-bg); color: var(--bd-ok); }
 .bd-app .cd-tl-ico .tw-ico { width: 14px; height: 14px; vertical-align: 0; }
-.bd-app .cd-tl-main { min-width: 0; }
+/* an entry keeps a reading measure on a wide card, so its date sits at the end of its words, not across the card */
+.bd-app .cd-tl-main { min-width: 0; max-width: 72ch; }
 .bd-app .cd-tl-top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2px 12px; min-height: 28px; }
 .bd-app .cd-tl-kind { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .bd-app .cd-tl-word { font-size: 14px; font-weight: 700; line-height: 1.3; }
@@ -1312,7 +1399,7 @@
 .bd-app .ad-meta { margin: -4px 0 12px; }
 .bd-app .ad-form { display: flex; flex-direction: column; gap: 14px; }
 .bd-app .ad-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; max-width: 720px; }
-.bd-app .ad-grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); max-width: none; }
+.bd-app .ad-grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .bd-app .ad-sub-title { font-size: 14px; font-weight: 600; line-height: 1.4; color: var(--bd-ink); }
 .bd-app .ad-sub-text { margin-top: 2px; font-size: 13px; line-height: 1.45; color: var(--bd-ink-2); }
 .bd-app .ad-lock { display: flex; align-items: center; gap: 6px; }
@@ -1351,7 +1438,8 @@
 .bd-app .ad-kv > div { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 4px 16px; align-items: center; }
 .bd-app .ad-kv dt { font-size: 13px; color: var(--bd-ink-2); }
 .bd-app .ad-kv dd { margin: 0; min-width: 0; font-size: 14px; }
-.bd-app .ad-lists { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px 40px; }
+/* every form on Admin is the same 720px block (Add a person, Friday list, Goals, Pick lists); the tables run full width */
+.bd-app .ad-lists { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px 40px; max-width: 720px; }
 .bd-app .ad-list-head { display: flex; align-items: center; gap: 8px; }
 .bd-app .ad-chips { display: flex; flex-wrap: wrap; gap: 10px; margin: 0; padding: 0; list-style: none; }
 .bd-app .ad-chip {
@@ -1394,6 +1482,9 @@
 @media (max-width: 1023px) { .bd-app .ad-lists { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 767px) {
   .bd-app .ad-navbar { position: static; margin: 0 0 14px; padding: 0; }
+  /* a card's title and its button ("Import a workbook") share a row while they fit; at 320 in a wide font
+     (Linux's DejaVu Sans) the button drops under the title instead of pushing the page sideways */
+  .bd-app .ad-sec > .card-head { flex-wrap: wrap; }
   /* the six sections wrap to rows instead of scrolling out of sight */
   .bd-app .ad-nav.tabs { flex-wrap: wrap; overflow: visible; }
   .bd-app .ad-sec { scroll-margin-top: 64px; }
