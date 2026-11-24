@@ -1544,6 +1544,16 @@ def test_the_banner_shows_the_seeds_due_count_above_the_progress_card(page_as, e
     expect(pg.locator("#summary #wk-due-line")).to_have_text(DUE_ONE)       # the card's own line stays
 
 
+def test_the_banner_is_calm_blue_not_the_caution_yellow_of_the_due_pill(page_as, expect):
+    """Hanz: "could we have a different color for the maintenance banner" -> Calm blue (2026-11-24)."""
+    _, pg = page_as("/bd/", AVERY)
+    wait_week(pg)
+    banner = pg.locator(BANNER)
+    expect(banner).to_be_visible()
+    look = banner.evaluate("el => { const s = getComputedStyle(el); return [s.backgroundColor, s.color]; }")
+    assert look == ["rgb(237, 242, 247)", "rgb(74, 107, 138)"], look      # --bd-info-bg, --bd-info
+
+
 def test_show_moves_focus_to_next_up_and_changes_nothing(page_as, expect):
     _, pg = page_as("/bd/", AVERY)
     wait_week(pg)

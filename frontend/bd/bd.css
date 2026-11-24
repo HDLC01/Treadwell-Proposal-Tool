@@ -613,9 +613,10 @@
 .bd-app .wk-live { margin-top: 10px; font-size: 13px; color: var(--bd-ink-2); }
 .bd-app .wk-due-line { display: inline-flex; margin-top: 10px; padding: 3px 10px; border-radius: var(--bd-r-pill);
   background: var(--bd-warn-bg); color: var(--bd-warn); font-size: 13px; font-weight: 600; line-height: 1.35; }
-/* The maintenance banner above the progress card: the components' .banner (the caution ground and ink
-   of the "Maintenance · due" pill, the card radius), the main column's full width. The words take
-   the room and Show sits at the end; on a narrow screen Show wraps under the words. */
+/* The maintenance banner above the progress card: the components' .banner-info (calm blue, Hanz's pick
+   on 2026-11-24 over the caution yellow of the "Maintenance · due" pill), the card radius, the main
+   column's full width. The words take the room and Show sits at the end; on a narrow screen Show
+   wraps under the words. */
 .bd-app .wk-due-banner { flex-wrap: wrap; align-items: center; gap: 10px 12px; margin-bottom: 14px; padding: 12px 16px; }
 .bd-app .wk-due-banner-ico { display: inline-flex; flex: none; align-self: flex-start; margin-top: 1px; }
 .bd-app .wk-due-banner .wk-due-banner-ico .tw-ico { margin-top: 0; }
