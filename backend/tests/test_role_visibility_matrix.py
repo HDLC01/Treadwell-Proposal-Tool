@@ -105,13 +105,15 @@ def test_the_matrix_rows_are_exactly_the_sidebar_this_role_gets(ran, role):
 
 
 @needs_node
-def test_the_bd_crm_is_one_beta_row_every_role_sees_with_nothing_denied(ran):
-    """#806: one new Beta row, tagged BETA, with its own glyph. Hiding it from the user role is a
-    data step on this page (Q10), so with no policy every role's sidebar carries it."""
+def test_the_bd_crm_is_one_daily_row_every_role_sees_with_nothing_denied(ran):
+    """#806: one row with its own glyph; out of Beta and untagged since 2026-11-24 (Hanz: "put the BD
+    CRM to the sidebar not as beta"). Hiding it from the user role is a data step on this page (Q10),
+    so with no policy every role's sidebar carries it."""
     rows = [r for r in ran["matrix"]["rows"] if r["href"] == "/bd/"]
     assert len(rows) == 1, rows
     row = rows[0]
-    assert (row["section"], row["glyph"], row["label"], row["tag"]) == ("Beta", "users", "BD CRM", "BETA")
+    assert (row["section"], row["glyph"], row["label"]) == ("Active", "users", "BD CRM"), row
+    assert not row["tag"], row
     assert row["roles"] == {"user": True, "admin": True, "super_admin": True}, row["roles"]
     others = [r["glyph"] for r in ran["matrix"]["rows"] if r["href"] != "/bd/"]
     assert "users" not in others

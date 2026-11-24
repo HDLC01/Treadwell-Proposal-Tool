@@ -1511,3 +1511,202 @@ def test_a_manager_opens_a_company_row_but_cannot_act_on_it(env, page_as, expect
         got = post_status(pg, "/api/bd/tasks/%d/%s" % (DANA, act))
         assert got.get("status") == 403, (act, got)
     assert row_status(week_json(pg, owner=1), PRAIRIE) == ["open"]
+
+
+# ── the maintenance banner at the top of This Week ───────────────────────────────────────────────
+# Hanz: "could we have a banner for maintenance accounts", at the top of This Week. The seed's week has
+# one maintenance company due (Kaw Valley: Hal), so the banner says "1 maintenance account due this
+# week"; Give Me 10 More pins Nora (moved to Osage Plains first: a company of her own), so it says 2.
+BANNER = "#wk-due-banner"
+BANNER_ONE = "1 maintenance account due this week"
+BANNER_STAYS = "They stay on the list until you log a call, meeting, email or text."
+DEJAVU = '#main, #main * { font-family: "DejaVu Sans", sans-serif !important; }'
+
+
+def active_id(pg):
+    return pg.evaluate("() => document.activeElement && document.activeElement.id")
+
+
+def test_the_banner_shows_the_seeds_due_count_above_the_progress_card(page_as, expect):
+    _, pg = page_as("/bd/", AVERY)
+    wait_week(pg)
+    banner = pg.locator(BANNER)
+    expect(banner).to_be_visible()
+    expect(banner.locator("#wk-due-banner-h")).to_have_text(BANNER_ONE)
+    expect(banner).to_contain_text(BANNER_STAYS)
+    assert banner.get_attribute("aria-labelledby") == "wk-due-banner-h"
+    assert banner.evaluate("el => el.tagName") == "SECTION"
+    assert banner.locator("svg").count() == 1, "one icon"
+    head, box, card = (pg.locator(".wk-head").bounding_box(), banner.bounding_box(), pg.locator("#summary").bounding_box())
+    assert head["y"] + head["height"] <= box["y"] + 1, "under the page header"
+    assert box["y"] + box["height"] <= card["y"] + 1, "above the progress card"
+    assert abs(box["x"] - card["x"]) <= 1 and abs(box["width"] - card["width"]) <= 1, "as wide as the progress card"
+    expect(pg.locator("#summary #wk-due-line")).to_have_text(DUE_ONE)       # the card's own line stays
+
+
+def test_the_banner_is_calm_blue_not_the_caution_yellow_of_the_due_pill(page_as, expect):
+    """Hanz: "could we have a different color for the maintenance banner" -> Calm blue (2026-11-24)."""
+    _, pg = page_as("/bd/", AVERY)
+    wait_week(pg)
+    banner = pg.locator(BANNER)
+    expect(banner).to_be_visible()
+    look = banner.evaluate("el => { const s = getComputedStyle(el); return [s.backgroundColor, s.color]; }")
+    assert look == ["rgb(237, 242, 247)", "rgb(74, 107, 138)"], look      # --bd-info-bg, --bd-info
+
+
+def test_show_moves_focus_to_next_up_and_changes_nothing(page_as, expect):
+    _, pg = page_as("/bd/", AVERY)
+    wait_week(pg)
+    before = week_json(pg)
+    pg.locator(BANNER + ' [data-act="show-due"]').click()
+    pg.wait_for_function("() => document.activeElement && document.activeElement.id === 'wk-next'", timeout=5000)
+    assert focus_is_on_the_page(pg)
+    expect(pg.locator("#wk-next [data-task]")).to_have_attribute("data-task", str(HAL))
+    expect(pg.locator("#wk-next")).to_be_in_viewport()
+    # By keyboard as well: Tab to Show, Enter.
+    pg.locator(BANNER + ' [data-act="show-due"]').focus()
+    pg.keyboard.press("Enter")
+    pg.wait_for_function("() => document.activeElement && document.activeElement.id === 'wk-next'", timeout=5000)
+    after = week_json(pg)
+    assert [(r["id"], r["status"]) for r in after["rows"]] == [(r["id"], r["status"]) for r in before["rows"]]
+    assert after["due_count"] == before["due_count"] == 1
+
+
+def test_a_redraw_keeps_focus_on_show(page_as, expect):
+    """A background refresh (here the one a saved call on Dana starts, held until focus is on Show)
+    redraws the banner: focus stays on Show, it does not drop to <body>."""
+    _, pg = page_as("/bd/", AVERY)
+    wait_week(pg)
+    pg.evaluate("() => { window.__hold = false; window.__gate = new Promise(r => { window.__open = r; });"
+                " const get = BDApi.get; BDApi.get = (p, ...a) => window.__hold && p.indexOf('/api/bd/week') === 0"
+                " ? window.__gate.then(() => get.call(BDApi, p, ...a)) : get.call(BDApi, p, ...a); }")
+    pg.evaluate("() => { window.__hold = true; }")
+    call(node(pg, DANA))
+    sheet(pg).locator('[data-outcome="voicemail"]').click()
+    sheet(pg).locator('[data-act="close"]').click()
+    expect(sheet(pg)).to_be_hidden()
+    pg.locator(BANNER + ' [data-act="show-due"]').focus()
+    pg.evaluate("() => { window.__shown = document.activeElement; window.__open(); }")
+    pg.wait_for_function("() => !window.__shown.isConnected", timeout=10000)
+    expect(pg.locator(BANNER + ' [data-act="show-due"]')).to_be_focused()
+
+
+def test_when_a_refresh_takes_the_banner_away_from_under_show_focus_stays_on_the_page(page_as, expect):
+    """Focus is on Show while a held refresh (the one "Done, nothing to log" on Dana starts) comes back
+    with nothing due: Hal was followed up elsewhere meanwhile, so Next up's Call (his) goes with the
+    repaint. Focus lands on a control on show after the repaint, never on <body>."""
+    _, pg = page_as("/bd/", AVERY)
+    wait_week(pg)
+    pg.evaluate("() => { window.__hold = false; window.__gate = new Promise(r => { window.__open = r; });"
+                " const get = BDApi.get; BDApi.get = (p, ...a) => window.__hold && p.indexOf('/api/bd/week') === 0"
+                " ? window.__gate.then(() => get.call(BDApi, p, ...a)) : get.call(BDApi, p, ...a); }")
+    pg.evaluate("() => { window.__hold = true; }")
+    choose(pg, node(pg, DANA), "done")
+    expect(pg.locator('#wk-done [data-task="%d"][data-status="done"]' % DANA)).to_be_visible()
+    log_by_api(pg, HAL_C, "call", "voicemail")      # Hal followed up elsewhere: the week now has 0 due
+    pg.locator(BANNER + ' [data-act="show-due"]').focus()
+    pg.evaluate("() => { window.__open(); }")
+    expect(pg.locator(BANNER)).to_be_hidden()
+    expect(node(pg, HAL)).to_have_attribute("data-status", "done")
+    settled(pg)
+    assert focus_is_on_the_page(pg), pg.evaluate("() => document.activeElement && document.activeElement.outerHTML.slice(0, 120)")
+    assert pg.evaluate("() => document.activeElement.getClientRects().length > 0"), "focus is on a control on show"
+
+
+def test_the_banner_goes_at_once_when_the_last_due_row_is_followed_up(page_as, expect):
+    """A voicemail on Hal follows up Kaw Valley: the banner goes from what the save returned, even when
+    every later read of the week fails, and the change is said in the page's live region."""
+    _, pg = page_as("/bd/", AVERY)
+    wait_week(pg)
+    expect(pg.locator(BANNER)).to_be_visible()
+    assert "maintenance" not in pg.locator("#live").text_content(), "the first paint announces nothing"
+    pg.evaluate("() => { const get = BDApi.get; BDApi.get = (p, ...a) => p.indexOf('/api/bd/week') === 0"
+                " ? Promise.reject(new Error('offline')) : get.call(BDApi, p, ...a); }")
+    call(pg.locator("#wk-next"))
+    sheet(pg).locator('[data-outcome="voicemail"]').click()
+    expect(pg.locator(BANNER)).to_be_hidden()
+    expect(pg.locator("#live")).to_have_text("No maintenance accounts due this week.")
+    assert pg.locator(BANNER + " *").count() == 0
+
+
+def test_the_banner_counts_a_second_pin_and_says_so(env, page_as, expect):
+    nora_elsewhere(env)
+    _, pg = page_as("/bd/", AVERY)
+    wait_week(pg)
+    expect(pg.locator("#wk-due-banner-h")).to_have_text(BANNER_ONE)
+    pg.locator("#ten-more-btn").click()
+    expect(pg.locator("#wk-due-banner-h")).to_have_text("2 maintenance accounts due this week")
+    expect(pg.locator("#live")).to_have_text("2 maintenance accounts due this week.")
+    pg.locator(BANNER + ' [data-act="show-due"]').click()
+    pg.wait_for_function("() => document.activeElement && document.activeElement.id === 'wk-next'", timeout=5000)
+
+
+def test_switching_whose_list_redraws_the_banner_for_that_list(page_as, expect):
+    """Devon (manager) on Avery's week sees her banner; Blair's list has nothing due, so none; back on
+    Avery's it shows again. A switch is said as "Showing <name>'s list.", not as a count change."""
+    _, pg = page_as("/bd/?owner=1", DEVON)
+    wait_week(pg)
+    expect(pg.locator("#wk-due-banner-h")).to_have_text(BANNER_ONE)
+    pg.select_option("#owner-pick", "2")
+    expect(pg.locator("#wk-greeting")).to_have_text("Blair's week")
+    wait_week(pg)
+    expect(pg.locator(BANNER)).to_be_hidden()
+    expect(pg.locator("#live")).to_have_text("Showing Blair Fenn's list.")
+    pg.select_option("#owner-pick", "1")
+    expect(pg.locator("#wk-greeting")).to_have_text("Avery's week")
+    wait_week(pg)
+    expect(pg.locator("#wk-due-banner-h")).to_have_text(BANNER_ONE)
+    expect(pg.locator("#live")).to_have_text("Showing Avery Quill's list.")
+    pg.locator(BANNER + ' [data-act="show-due"]').click()
+    pg.wait_for_function("() => document.activeElement && document.activeElement.id === 'wk-next'", timeout=5000)
+
+
+@pytest.mark.parametrize("viewport", [PHONE, {"width": 320, "height": 700}], ids=["390", "320"])
+def test_on_a_phone_the_banner_wraps_and_show_is_reachable(page_as, expect, viewport):
+    _, pg = page_as("/bd/", AVERY, viewport)
+    wait_week(pg)
+    pg.add_style_tag(content=DEJAVU)
+    settled(pg)
+    banner = pg.locator(BANNER)
+    expect(banner).to_be_visible()
+    over = sideways(pg)
+    assert over <= 1, "scrolls sideways by %dpx at %d wide" % (over, viewport["width"])
+    box = banner.bounding_box()
+    assert box["x"] >= 0 and box["x"] + box["width"] <= viewport["width"] + 0.5, box
+    for sel in ("#wk-due-banner-h", ".wk-due-banner-sub", '[data-act="show-due"]'):
+        b = banner.locator(sel).bounding_box()
+        assert b["x"] >= box["x"] - 0.5 and b["x"] + b["width"] <= box["x"] + box["width"] + 0.5, (sel, b, box)
+    ico, h = banner.locator(".wk-due-banner-ico").bounding_box(), banner.locator("#wk-due-banner-h").bounding_box()
+    assert ico["x"] + ico["width"] <= h["x"] and ico["y"] < h["y"] + h["height"], ("the icon sits beside the heading", ico, h)
+    show = banner.locator('[data-act="show-due"]')
+    assert show.bounding_box()["height"] >= 44, "a thumb-sized button"
+    show.click()
+    pg.wait_for_function("() => document.activeElement && document.activeElement.id === 'wk-next'", timeout=5000)
+    assert sideways(pg) <= 1
+
+
+def test_the_banner_is_absent_while_the_next_list_loads_and_on_its_load_error(page_as, expect):
+    """Spec point 1: no banner while a list loads or after it fails to. A manager on Avery's list (one
+    company due) switches to Blair's with the week fetch held: the banner is gone while it loads and
+    stays gone on Blair's list (nothing due). Switching back to Avery's with the fetch failing keeps
+    it gone. (Found by the independent verifier: removing hideBanner() from showLoading passed every
+    other banner test.)"""
+    banner = "#wk-due-banner"
+    _, pg = page_as("/bd/?owner=1", DEVON)
+    wait_week(pg)
+    expect(pg.locator(banner)).to_be_visible()
+    pg.evaluate("() => { window.__hold = false; window.__gate = new Promise(r => { window.__open = r; });"
+                " const get = BDApi.get; BDApi.get = (p, ...a) => window.__hold && p.indexOf('/api/bd/week') === 0"
+                " ? window.__gate.then(() => get.call(BDApi, p, ...a)) : get.call(BDApi, p, ...a); }")
+    pg.evaluate("() => { window.__hold = true; }")
+    pg.select_option("#owner-pick", "2")
+    expect(pg.locator(banner)).to_be_hidden()
+    pg.evaluate("() => { window.__open(); }")
+    expect(pg.locator("#wk-greeting")).to_have_text("Blair's week")
+    expect(pg.locator(banner)).to_be_hidden()
+    pg.evaluate("() => { const get = BDApi.get; BDApi.get = (p, ...a) => p.indexOf('/api/bd/week') === 0"
+                " ? Promise.reject(Object.assign(new Error('The BD database is not answering.'), {status: 503}))"
+                " : get.call(BDApi, p, ...a); }")
+    pg.select_option("#owner-pick", "1")
+    expect(pg.locator("#lists")).to_contain_text("not answering", timeout=15000)
+    expect(pg.locator(banner)).to_be_hidden()

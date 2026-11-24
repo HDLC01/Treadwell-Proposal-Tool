@@ -728,6 +728,13 @@
       // you watch what is due. Bid Calendar sits right after Bid Pipeline because the two answer halves
       // of one question - the board is "where does each bid stand", the calendar is "what is due, and
       // when". Both read the Basisboard bids; neither writes to them.
+      // THE BD CRM (#806, spec #802): the business-development CRM under /bd/. It came in first under
+      // Beta; Hanz moved it here on 2026-11-24, the day RJ went live on it: "put the BD CRM to the
+      // sidebar not as beta". Directly above Lead Inbox because outreach comes before the leads it
+      // brings in. Its glyph is users (people to call), which no other row uses. The row is a
+      // collapsible group: bdGroup() adds the chevron and BD's sections under it, and drops the whole
+      // group when the row is denied or switched off.
+      bdGroup(navItem("/bd/", "users", "BD CRM"), !spec && BD_OPEN) +
       navItem("/leads.html", "inbox", "Lead Inbox") +
       navItem("/crm.html", "funnel", "Bid Pipeline") +
       navItem("/calendar.html", "calendar", "Bid Calendar") +
@@ -759,11 +766,6 @@
       // their BETA tag as well as the heading: the heading says which shelf, and the tag is what survives
       // being read alone in the Admin role matrix, which prints labels without headings.
       '<div class="tw-section">Beta</div>' +
-      // THE BD CRM (#806, spec #802): the business-development CRM, moved in under /bd/ as a beta.
-      // First under Beta, as in the approved mock-up. Its glyph is users (people to call), which
-      // no other row uses. The row is a collapsible group: bdGroup() adds the chevron and BD's
-      // sections under it, and drops the whole group when the row is denied or switched off.
-      bdGroup(navItem("/bd/", "users", "BD CRM", "BETA"), !spec && BD_OPEN) +
       // Opens at the beta's INTAKE, step 1 of its own four. A door straight into step 2 starts
       // an estimator on a project with no name, no bid date and no job conditions - and the conditions are
       // exactly what moved onto the intake form in the 2026-08-17 rework, so pricing first would mean

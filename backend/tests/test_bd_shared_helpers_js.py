@@ -300,3 +300,43 @@ def test_a_pick_list_falls_back_to_the_servers_defaults_when_settings_did_not_lo
                 ("setting", [{"default_frequency": {"maintenance": 6}}, "default_frequency"]),
                 ("setting", [{"default_frequency": {}}, "default_frequency"])) == \
         [["Met"], ["Meeting Set", "Met", "Proposal", "Won"], {"maintenance": 6}, {"maintenance": 3}]
+
+
+# ── the pager (Contacts, 25 account rows a page; the pattern of Plan vs Actual's #819) ──────────────
+GAP = "…"
+
+
+@pytest.mark.parametrize("page,pages,want", [
+    (1, 1, [1]), (1, 2, [1, 2]), (3, 7, [1, 2, 3, 4, 5, 6, 7]),
+    (1, 11, [1, 2, 3, 4, 5, GAP, 11]), (4, 11, [1, 2, 3, 4, 5, GAP, 11]),
+    (5, 11, [1, GAP, 4, 5, 6, GAP, 11]), (6, 11, [1, GAP, 5, 6, 7, GAP, 11]),
+    (8, 11, [1, GAP, 7, 8, 9, 10, 11]), (11, 11, [1, GAP, 7, 8, 9, 10, 11]),
+])
+def test_page_items_shows_every_page_up_to_seven_else_the_ends_and_around_with_ellipses(page, pages, want):
+    assert one("pageItems", page, pages) == want
+
+
+def test_page_model_splits_26_accounts_into_two_pages_of_25():
+    first, second = call(("pageModel", [26, 1, 25]), ("pageModel", [26, 2, 25]))
+    assert (first["page"], first["pages"], first["start"], first["end"], first["text"]) == (1, 2, 0, 25, "1–25 of 26")
+    assert (first["prev"], first["next"], first["items"]) == (False, True, [1, 2])
+    assert (second["page"], second["start"], second["end"], second["text"]) == (2, 25, 26, "26–26 of 26")
+    assert (second["prev"], second["next"]) == (True, False)
+
+
+def test_page_model_counts_the_real_list_and_a_page_past_the_end_is_the_last():
+    big, past, zero, odd, fits = call(("pageModel", [256, 1, 25]), ("pageModel", [26, 9, 25]), ("pageModel", [0, 3, 25]),
+                                      ("pageModel", [30, -2, 25]), ("pageModel", [25, 1, 25]))
+    assert (big["pages"], big["text"], big["items"]) == (11, "1–25 of 256", [1, 2, 3, 4, 5, GAP, 11])
+    assert (past["page"], past["start"], past["end"]) == (2, 25, 26)
+    assert (zero["page"], zero["pages"], zero["text"], zero["next"]) == (1, 1, "", False)
+    assert odd["page"] == 1
+    assert (fits["pages"], fits["text"]) == (1, "1–25 of 25")
+
+
+@pytest.mark.parametrize("raw,want", [
+    ("2", 2), ("11", 11), ("999999", 999999), (None, 1), ("", 1), ("0", 1), ("-3", 1), ("2.5", 1), ("abc", 1),
+    ("02", 1), ("1000000", 1), (" 3", 1),
+])
+def test_page_param_reads_a_whole_page_number_from_the_address_else_page_1(raw, want):
+    assert one("pageParam", raw) == want

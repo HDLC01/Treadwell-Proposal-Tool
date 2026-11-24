@@ -43,6 +43,15 @@
  * "Done, nothing to log" (the server answers 409 for both), no Undo on a done one; a logged call,
  * meeting, email or text for each person due there clears it and moves it to Done.
  *
+ * The maintenance banner (#wk-due-banner, under the page header, above the progress card): while the
+ * list being looked at has open "Due now" rows it says "N maintenance account(s) due this week" (the
+ * same count as the "Due now" line, dueNow()) and offers Show, which only moves focus (and scrolls)
+ * to the first due row: Next up, which parts() always makes the first open "Due now" row (the "Due
+ * now" heading is only a fallback in case that ever changes). It follows
+ * the count at once (applyRow), is redrawn for the list "Whose list" switches to, and is absent at 0,
+ * while loading, on a load error and before a list is chosen. A count change after the list's first
+ * paint is said in #live; a redraw with the same count says nothing.
+ *
  * Hooks the tests use (the plan's 1.4 hook rules): exactly one node per ROW carries data-task, the
  * row's id (its first task; the Next up card or a list row), with data-status open | done | snoozed;
  * a person inside a row carries data-person (their contact id); the tracker dots carry
@@ -94,6 +103,9 @@
     trayAll: false,    // "Show 2 more" pressed
     moreMsg: "",       // the 409 sentence under Give me 10 more
     offNow: {},        // row ids taken off in this page view (their Undo is shown)
+    dueSaid: null,     // the "Due now" count the banner last drew for this list (null: not drawn yet)
+    bannerLostFocus: false, // the banner went (or lost Show) while it held focus: renderAll re-homes it
+    doneSaid: null,    // the "N of 10 done" words last put in #live for this list
   };
 
   var main = document.getElementById("main");
@@ -108,6 +120,7 @@
   var ownerPick = document.getElementById("owner-pick");
   var trayEl = document.getElementById("wk-tray");
   var layoutEl = document.getElementById("wk-layout");
+  var bannerEl = document.getElementById("wk-due-banner");
 
   var icon = BD.icon;
   function $(sel, root) { return (root || document).querySelector(sel); }
@@ -621,7 +634,65 @@
     // Widths and lefts through the DOM (not style="" in markup) so a strict CSP cannot block them.
     Array.prototype.forEach.call(summaryEl.querySelectorAll("[data-w]"), function (el) { el.style.width = el.getAttribute("data-w") + "%"; });
     Array.prototype.forEach.call(summaryEl.querySelectorAll("[data-l]"), function (el) { el.style.left = el.getAttribute("data-l") + "%"; });
-    if (liveEl && total) liveEl.textContent = done + " of " + total + " done";
+    // Said when it changes, not on every redraw (a redraw would also talk over the banner's words).
+    var doneWords = done + " of " + total + " done";
+    if (liveEl && total && doneWords !== S.doneSaid) { S.doneSaid = doneWords; liveEl.textContent = doneWords; }
+  }
+
+  // ── drawing: the maintenance banner ──────────────────────────────────────────────────────
+
+  function dueWords(n) { return plural(n, "maintenance account") + " due this week"; }
+
+  /** The id of the first due row on show, for Show. Next up is always the first open "Due now" row
+   *  (parts()), so this is wk-next; wk-due-h is a fallback in case parts() ever stops putting due
+   *  rows first. null when neither is drawn. */
+  function dueTarget() {
+    var p = parts();
+    if (p.next && isMaint(p.next)) return "wk-next";
+    return p.due.length ? "wk-due-h" : null;
+  }
+
+  function hideBanner() {
+    if (!bannerEl) return;
+    bannerEl.hidden = true;
+    bannerEl.innerHTML = "";
+  }
+
+  /** The banner, from dueNow(): there while the count is above 0. A count different from the one
+   *  last drawn for this list is said in #live (the list's first paint says nothing). */
+  function renderBanner() {
+    if (!bannerEl) return;
+    var n = dueNow(), was = S.dueSaid;
+    S.dueSaid = n;
+    if (liveEl && was != null && was !== n) {
+      liveEl.textContent = n > 0 ? dueWords(n) + "." : "No maintenance accounts due this week.";
+    }
+    // A redraw replaces Show: focus on it goes back to the new one, never to <body>. When Show goes,
+    // the fallback waits for renderAll: picked now, it would be a node of the lists about to be
+    // repainted (often Next up's Call on the very due row that has just closed).
+    var hadFocus = bannerEl.contains(document.activeElement);
+    if (!(n > 0)) { hideBanner(); if (hadFocus) S.bannerLostFocus = true; return; }
+    var target = dueTarget();
+    bannerEl.innerHTML = '<span class="wk-due-banner-ico">' + icon("bell", 20) + "</span>" +
+      '<div class="wk-due-banner-text"><h2 class="wk-due-banner-title" id="wk-due-banner-h">' + esc(dueWords(n)) + "</h2>" +
+      '<p class="wk-due-banner-sub">They stay on the list until you log a call, meeting, email or text.</p></div>' +
+      (target ? '<button type="button" class="btn wk-due-banner-show" data-act="show-due" data-target="' + target +
+        '" aria-describedby="wk-due-banner-h">Show</button>' : "");
+    bannerEl.hidden = false;
+    if (hadFocus) {
+      var show = bannerEl.querySelector('[data-act="show-due"]');
+      if (show) { try { show.focus({ preventScroll: true }); } catch (e) { show.focus(); } } else S.bannerLostFocus = true;
+    }
+  }
+
+  /** Show: focus (and scroll to) the first due row. It changes no data. */
+  function showDue() {
+    var id = dueTarget();
+    var n = id ? document.getElementById(id) : null;
+    if (!n) return;                                 // focus stays on Show, never on <body>
+    var calm = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (n.scrollIntoView) n.scrollIntoView({ block: "start", behavior: calm ? "auto" : "smooth" });
+    try { n.focus({ preventScroll: true }); } catch (e) { n.focus(); }
   }
 
   // ── drawing: the lists ───────────────────────────────────────────────────────────────────
@@ -766,7 +837,8 @@
       ? '<div class="wk-next-also"><p class="wk-next-label2" id="wk-next-also-h">' + esc("Also at " + companyName(r)) + "</p>" +
         '<div class="wk-people" role="list" aria-labelledby="wk-next-also-h">' +
         others.map(function (p) { return personHTML(r, p); }).join("") + "</div></div>" : "";
-    return '<section class="wk-next-sec" id="wk-next" aria-labelledby="wk-next-name">' +
+    // tabindex -1: the banner's Show can move focus here (and a redraw puts it back by its id).
+    return '<section class="wk-next-sec" id="wk-next" tabindex="-1" aria-labelledby="wk-next-name">' +
       '<article class="card wk-next" data-task="' + esc(r.id) + '" data-status="open" data-company="' + esc(r.company && r.company.id) + '">' +
       '<div class="wk-next-main">' +
       '<div class="wk-next-top"><p class="wk-next-label">Next up</p><span class="wk-next-kind-top">' + kind + "</span></div>" +
@@ -816,7 +888,7 @@
   function dueHTML(p) {
     if (!p.due.length) return "";
     return '<section class="section wk-due" id="wk-due" aria-labelledby="wk-due-h">' +
-      '<div class="section-head"><h2 class="section-title" id="wk-due-h">Due now</h2>' +
+      '<div class="section-head"><h2 class="section-title" id="wk-due-h" tabindex="-1">Due now</h2>' +
       '<span class="section-meta">' + esc(p.due.length + " to go") + "</span></div>" +
       '<div class="card card-flush"><ul class="list wk-list wk-due-list">' + p.due.map(function (r) { return rowHTML(r); }).join("") + "</ul></div></section>";
   }
@@ -1064,8 +1136,14 @@
   function renderAll() {
     renderHead();
     renderSummary();
+    renderBanner();
     renderMain();
     renderTray();
+    if (S.bannerLostFocus) {
+      S.bannerLostFocus = false;
+      var a = document.activeElement;
+      if (!a || a === document.body || !document.contains(a)) focusShown([]);
+    }
     maybeNextWeek();
   }
 
@@ -1365,6 +1443,7 @@
     var r = rowOf(btn);
 
     if (act === "toggle") return toggleRow(btn);
+    if (act === "show-due") return showDue();         // focus only: every viewer of a list has it
     if (act === "call") { if (r) openCall(r, personOf(btn, r), "call"); return; }   // a real tel: link: no preventDefault
     if (act === "ten-more") return tenMore(btn);
     if (act === "run-weekly") return runWeekly(btn);
@@ -1440,6 +1519,7 @@
 
   function showError(e) {
     summaryEl.innerHTML = "";
+    hideBanner();
     finishEl.innerHTML = "";
     trayEl.hidden = true;
     layoutEl.classList.add("wk-solo");
@@ -1493,6 +1573,7 @@
     subEl.textContent = "Choose whose week to look at.";
     summaryEl.innerHTML = "";
     summaryEl.hidden = true;          // no pace card until there is a week to show
+    hideBanner();
     finishEl.innerHTML = "";
     trayEl.hidden = true;
     layoutEl.classList.add("wk-solo");
@@ -1517,6 +1598,7 @@
     listsEl.innerHTML = '<div class="section" id="loading" aria-hidden="true"><div class="stack-lg">' +
       '<div class="skeleton skeleton-card"></div><div class="skeleton skeleton-card"></div></div></div>';
     finishEl.innerHTML = "";
+    hideBanner();                     // the list being loaded draws its own
   }
 
   /** Show one salesperson's week (the picker and the "Whose week?" buttons both come here). */
@@ -1532,6 +1614,7 @@
       if (token !== S.loadToken) return;   // a newer pick is on its way
       setWeek(r.week);
       S.nextWeek = undefined; S.preview = false; S.trayOpen = null; S.moreMsg = "";
+      S.dueSaid = null; S.doneSaid = null;   // another list: its first paint is not a change
       if (ownerPick && ownerPick.querySelector('option[value="' + v + '"]')) ownerPick.value = String(v);
       renderAll();
       if (liveEl) liveEl.textContent = "Showing " + ((S.week.owner && S.week.owner.name) || "this") + "'s list.";
@@ -1558,6 +1641,7 @@
     subEl.textContent = window.TWAuth.bdFailure(res && res.status, res && res.body).message;
     summaryEl.innerHTML = "";
     summaryEl.hidden = true;
+    hideBanner();
     listsEl.innerHTML = "";
     finishEl.innerHTML = "";
     trayEl.hidden = true;

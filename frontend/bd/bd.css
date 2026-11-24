@@ -613,6 +613,23 @@
 .bd-app .wk-live { margin-top: 10px; font-size: 13px; color: var(--bd-ink-2); }
 .bd-app .wk-due-line { display: inline-flex; margin-top: 10px; padding: 3px 10px; border-radius: var(--bd-r-pill);
   background: var(--bd-warn-bg); color: var(--bd-warn); font-size: 13px; font-weight: 600; line-height: 1.35; }
+/* The maintenance banner above the progress card: the components' .banner-info (calm blue, Hanz's pick
+   on 2026-11-24 over the caution yellow of the "Maintenance · due" pill), the card radius, the main
+   column's full width. The words take the room and Show sits at the end; on a narrow screen Show
+   wraps under the words. */
+.bd-app .wk-due-banner { flex-wrap: wrap; align-items: center; gap: 10px 12px; margin-bottom: 14px; padding: 12px 16px; }
+.bd-app .wk-due-banner-ico { display: inline-flex; flex: none; align-self: flex-start; margin-top: 1px; }
+.bd-app .wk-due-banner .wk-due-banner-ico .tw-ico { margin-top: 0; }
+.bd-app .wk-due-banner-text { flex: 1 1 220px; min-width: 0; }
+.bd-app .wk-due-banner-title { font-size: 15px; font-weight: 700; line-height: 1.35; color: inherit; overflow-wrap: anywhere; }
+.bd-app .wk-due-banner-sub { margin-top: 2px; font-size: 14px; font-weight: 500; line-height: 1.4; color: inherit; }
+.bd-app .wk-due-banner-show { flex: none; margin-left: auto; }
+@media (max-width: 767px) {
+  /* The icon keeps its words beside it (20px icon + 12px gap); Show takes the next line. */
+  .bd-app .wk-due-banner-text { flex-basis: calc(100% - 32px); }
+}
+/* Show scrolls a due row to the top: clear of the tool's fixed top bar (52px). */
+.bd-app #wk-next, .bd-app #wk-due-h { scroll-margin-top: 68px; }
 .bd-app .wk-choices { display: flex; flex-wrap: wrap; gap: 8px; }
 .bd-app .wk-choices .btn { min-width: 140px; }
 @container wk-prog (min-width: 640px) {
@@ -1117,6 +1134,19 @@
 .bd-app .ct-p-status { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
 .bd-app .ct-people-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px;
   padding: 8px 14px 10px 66px; font-size: 13px; color: var(--bd-ink-2); background: var(--bd-paper); }
+
+/* The pager under the list (25 account rows a page; Plan vs Actual's, #819): "1–25 of 256", Previous, the
+   page numbers, Next. The page shown reads like a selected tab there: oxblood text on raised paper, no
+   Signal Red. A page change scrolls the list's top to just under the tool's 52px top bar. */
+.bd-app .ct-list { scroll-margin-top: 64px; }
+.bd-app .ct-pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin: 6px 0 0; }
+.bd-app .ct-range { font-size: 13px; color: var(--bd-ink-2); font-variant-numeric: tabular-nums; }
+.bd-app .ct-pages { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; }
+.bd-app .ct-pg-num { min-width: 36px; padding: 0 8px; font-variant-numeric: tabular-nums; }
+.bd-app .ct-pg[aria-current="page"] { background: var(--bd-recessed); border-color: var(--bd-ink-2); color: var(--bd-link);
+  box-shadow: inset 0 0 0 1px var(--bd-ink-2); }
+.bd-app .ct-pg-gap { padding: 0 4px; color: var(--bd-ink-2); }
+.bd-app .ct-pg-of { display: none; }
 @media (max-width: 767px) {
   .bd-app .ct-colhead { display: none; }
   .bd-app .ct-acct-toggle { grid-template-columns: 38px minmax(0, 1fr) 18px; gap: 2px 12px; padding: 10px 0 10px 12px; }
@@ -1131,6 +1161,11 @@
   .bd-app .ct-p-sub-phone { display: block; }
   .bd-app .ct-search { max-width: none; }
   .bd-app .ct-tidy-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* a phone: the range on its own line, then Previous, "Page N of M" and Next across the width */
+  .bd-app .ct-pager { flex-direction: column; align-items: stretch; }
+  .bd-app .ct-pages { justify-content: space-between; gap: 8px; }
+  .bd-app .ct-pg-num, .bd-app .ct-pg-gap { display: none; }
+  .bd-app .ct-pg-of { display: inline; font-size: 14px; color: var(--bd-ink); white-space: nowrap; font-variant-numeric: tabular-nums; }
 }
 
 .bd-app .add-wrap { max-width: 640px; }

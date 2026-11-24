@@ -40,7 +40,7 @@
     </section>
 
     <div class="ct-tools" id="ct-tools">
-      <div class="tabs ct-tabs" role="tablist" aria-label="Contact lists">
+      <div class="tabs ct-tabs" id="ct-tabs" role="tablist" aria-label="Contact lists">
         <button type="button" role="tab" id="ct-tab-bd" data-tab="bd" aria-selected="true" aria-controls="ct-list">BD accounts</button>
         <button type="button" role="tab" id="ct-tab-maintenance" data-tab="maintenance" aria-selected="false" aria-controls="ct-list" tabindex="-1">Maintenance</button>
       </div>
@@ -60,6 +60,8 @@
       <p class="ct-count" id="ct-count" hidden></p>
       <section class="ct-dupes" id="ct-dupes" aria-label="Likely duplicate accounts" hidden></section>
       <div class="ct-list" id="ct-list" role="tabpanel" aria-labelledby="ct-tab-bd" aria-busy="true"><div class="skeleton skeleton-card"></div></div>
+      <!-- 25 account rows a page: the page splits the list it has (the server sends every account). -->
+      <nav class="ct-pager" id="ct-pager" aria-label="Pages of accounts" hidden></nav>
     </div>
   </main>
 
