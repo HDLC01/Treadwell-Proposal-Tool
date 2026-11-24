@@ -251,12 +251,12 @@ def test_c4_non_numeric_ids_are_404(bd_seeded, bd_as_user, who, method, path):
 def test_c5_another_salesperson_may_flag_not_the_right_person(bd_seeded, bd_as_user, bd_db):
     """Task 301 (Hal Brecken, contact 30) is on Avery's (1) list. Blair (2), another salesperson, may
     not tick it done (the own-list check), but may flag Hal as not the right person: a data fix, not
-    a list action."""
+    a list action. The Kaw Valley row stays open (#828): Nora is still there to call."""
     envelope(bd_as_user(2).post("/api/bd/tasks/301/done", json={}), 403, "forbidden")
     r = bd_as_user(2).post("/api/bd/tasks/301/not-right-person", json={"note": "Hal retired."})
     assert r.status_code == 200, r.text
     body = r.json()
-    assert (body["task"]["id"], body["task"]["status"]) == (301, "done")
+    assert (body["task"]["id"], body["task"]["status"]) == (301, "open")
     assert (body["contact"]["id"], body["contact"]["confirmed"]) == (30, False)
     ev = bd_db.execute("select kind, actor_id, contact_id, detail from bd.events").fetchall()
     assert ev == [{"kind": "unconfirmed", "actor_id": 2, "contact_id": 30, "detail": "Hal retired."}]

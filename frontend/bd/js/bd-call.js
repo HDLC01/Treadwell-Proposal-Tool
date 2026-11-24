@@ -943,13 +943,16 @@
     });
   }
 
-  /** Wrong person: the task's not-right-person (closes it as done), or for someone not on this
-   *  week's list the contact's confirm {confirmed: false} and the note as a note. */
+  /** Wrong person: the task's not-right-person, naming the person (contact_id: someone on the task's
+   *  company row, #828; it closes the row once nobody else there can be called), or for someone not
+   *  on this week's list the contact's confirm {confirmed: false} and the note as a note. */
   function sendNotRight(f, note) {
     var c = f.contact;
     var p;
     if (f.task && f.task.id != null) {
-      p = f.req("POST", BDApi.path("tasks", f.task.id, "not-right-person"), note ? { note: note } : {});
+      var body = note ? { note: note } : {};
+      if (c && c.id != null) body.contact_id = c.id;
+      p = f.req("POST", BDApi.path("tasks", f.task.id, "not-right-person"), body);
     } else {
       p = f.req("POST", BDApi.path("contacts", c.id, "confirm"), { confirmed: false }).then(function (r) {
         if (!note) return r;

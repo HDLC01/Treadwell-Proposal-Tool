@@ -247,7 +247,9 @@ newest first.
 
 ### Task, TaskBatch
 
-A task is one slot in a weekly 10. **Tasks have no due date and can never be overdue.**
+A task is one slot in a weekly 10. Since #828 a slot is a **company's**: the task is for the person
+suggested first there, the company comes from that person, and This Week shows tasks as company rows
+(WeekRow below). **Tasks have no due date and can never be overdue.**
 
 ```json
 {
@@ -331,13 +333,28 @@ when due. The rest are ranked in two tiers: first the **due maintenance** contac
 first (`maintenance_due_date` ascending, a contact never followed up before any date, then contact
 id), then everyone else (business development) by score, highest first, then by contact id.
 
+**The Weekly 10 is ten companies (#828; `weekly.rank_companies`, the rules in
+`backend/bd/company_facts.py`).** Each BD person is scored with their **company's** tries and 3-day
+rest laid over their own (a due maintenance person keeps their own, as before #828): the tries part is the company's **misses** (a voicemail or a call nobody answered,
+with anyone there who is not archived, whoever owns them, dated on or before today in Central, since
+the last live talk with anyone there), and "tried in the last 3 days" means anyone there was called or
+left a voicemail in the last 3 days. The cadence part ("last live talk", "never had a live talk") stays
+the person's own. A company where anyone is already on the list being built (the same facts as above,
+per company) is left out whole. Each company then takes **one** pick: its best person, first in the
+order above. Its `kind` is the company's: `new` only while nobody there has had a live talk, else
+`followup`, whatever the person's own history. Its reason is worded for the company: at a `followup`
+company, a best person who never talked live reads "N tries since the last live talk" (as the row's
+misses line does), not "Never reached after N tries". The 5 + 5 split and Give Me 10 More's `n` count these
+company picks. A company with a due maintenance person is a maintenance row: every due person there
+gets their own `maintenance` task (the follow-up is still per person) and the company takes no BD slot.
+
 A Friday batch makes one `maintenance` task per due maintenance contact first, **then** the BD split:
 the best `weekly.new_count` `new` and the best `weekly.followup_count` `followup` among the BD
-contacts only; when one side is short the other fills its slots (new first), and the BD picks are
+companies only; when one side is short the other fills its slots (new first), and the BD picks are
 listed best first. So the batch is the maintenance tasks followed by the BD picks (task ids ascend in
 that order), and with more than 10 maintenance contacts due the batch simply grows (maintenance count
-plus the BD picks). "Give Me 10 More" takes the top `n` of the same ranking, so a contact that fell
-due mid-week heads the extra 10 as a `maintenance` task. A batch is made even when nobody is left
+plus the BD picks). "Give Me 10 More" takes the top `n` companies of the same ranking, so a contact
+that fell due mid-week heads the extra 10 as a `maintenance` task. A batch is made even when nobody is left
 (`tasks_created: 0`). There is one Friday batch per salesperson and week; a forced re-run keeps the
 old one (still listed, no longer counted in `done_count`/`total`) and adds the new one after it.
 
@@ -355,6 +372,7 @@ What the This Week page draws.
     { "id": 41, "kind": "friday", "owner": { "id": 1, "name": "Troy" }, "week_start": "2026-11-02", "generated_at": "2026-10-30T16:00:00-05:00" }
   ],
   "tasks": [],
+  "rows": [],
   "done_count": 4,
   "total": 10,
   "due_count": 0,
@@ -379,16 +397,21 @@ What the This Week page draws.
   last "Give Me 10 More" looks in `batches` by `kind` and by whether a batch holds a BD task. `tasks`
   holds the tasks of **all** of them in that order (the example leaves it empty to keep it short; it
   holds Task objects).
-- `done_count`/`total` are the **live Friday batch's business-development tasks only** (the latest
-  Friday batch of the week, leaving out its `maintenance` tasks; one a forced re-run replaced is still
-  listed but not counted): the headline "did I do my 10?". Asking for more never makes the 10 look
-  half done; each `ten_more` batch's count is worked out by the page from its own tasks. A snoozed
-  task stays in `total` (a slot is never refilled). `task_done`/`task_snooze` answer with the same
-  BD-only numbers. `tasks` still lists the maintenance tasks, so it can hold more than `total`.
-- `due_count` is the number of **open** `maintenance` tasks on this week's lists, any batch (the
+- `rows` is the week as **company rows** (#828), the WeekRow objects below, in the order of each row's
+  first task: what This Week draws. `tasks` still lists every task.
+- `done_count`/`total` are the **live Friday batch's business-development ROWS only** (`section`
+  `ten`: the latest Friday batch of the week, leaving out its `maintenance` tasks; one a forced re-run
+  replaced is still listed but not counted): the headline "did I do my 10?", counted in companies.
+  Asking for more never makes the 10 look half done; each `ten_more` batch's count is worked out by the
+  page from its own rows. A snoozed row stays in `total` (a slot is never refilled). `task_done`/
+  `task_snooze` answer with the same BD-only numbers. `tasks` still lists the maintenance tasks, so it
+  can hold more than `total`.
+- `due_count` is the number of **open "Due now" rows** (`section` `due`), one per company (the
   "Due now: N" line beside the headline). It drops when a call, meeting, email or text is logged for
-  the contact (or the task is closed with "not the right person"). It is `0` before the first batch.
-- Before the first Friday batch exists, `batch` is `null`, `batches` and `tasks` are `[]`, `total` is 0.
+  the last due person there (or the row is closed with "not the right person"). It is `0` before the
+  first batch.
+- Before the first Friday batch exists, `batch` is `null`, `batches`, `tasks` and `rows` are `[]`,
+  `total` is 0.
 - `pace` covers every contact the owner owns (bd and maintenance):
   `target_total = Σ frequency_per_year` (the derived one: a BD contact counts its cadence's 52, 12 or 4); `required_to_date = target_total × day_of_year ÷ days_in_year`
   (one decimal, Central day); `completed` = touches this year; `pct = round(100 × completed ÷ target_total)`;
@@ -401,6 +424,91 @@ What the This Week page draws.
 - `weekly_meetings` is the workbook's top box: `count` = meetings, hosted events and calls that set a
   meeting this week; `non_dsbc_website` = those whose contact's lead source is not one of
   `settings.system_lead_sources` (DSBC Sales, Website Lead: the "at least 1 initiated by Troy" rule).
+
+### WeekRow
+
+One company on This Week (#828): the tasks of the owner's week at one company (its people's company
+now) in one place, which is "Due now" for `maintenance` tasks (any batch) and the batch for the
+others. A list built since #828 has one task per BD row (one per due person on a "Due now" row); a
+week built before it can hold two people at one company, and they are one row all the same.
+
+```json
+{
+  "id": 401,
+  "section": "ten",
+  "batch_id": 41,
+  "task_ids": [401],
+  "kind": "followup",
+  "status": "open",
+  "done_at": null,
+  "snoozed_until": null,
+  "reason": "Never contacted. Key account.",
+  "reasons": ["Never contacted", "Key account"],
+  "score": 60,
+  "company": { "id": 2, "name": "Kestrelwood Gear Co." },
+  "misses": 2,
+  "last_live_at": "2026-06-01T10:00:00-05:00",
+  "people": [
+    {
+      "id": 2,
+      "name": "Marcus Ebner",
+      "title": "Facilities Manager",
+      "phone": "816.555.0102",
+      "phone_e164": "+18165550102",
+      "email": "marcus.ebner@kestrelwoodgea.example.com",
+      "confirmed": true,
+      "last_live_at": null,
+      "attempts_since_live": 1,
+      "promised_date": null,
+      "next_step": null,
+      "next_step_date": null,
+      "task_id": 401,
+      "not_right_person": false
+    },
+    {
+      "id": 7,
+      "name": "Dana Ruiz",
+      "title": "Owner",
+      "phone": "816.555.0107",
+      "phone_e164": "+18165550107",
+      "email": "dana.ruiz@kestrelwoodgea.example.com",
+      "confirmed": true,
+      "last_live_at": "2026-06-01T10:00:00-05:00",
+      "attempts_since_live": 1,
+      "promised_date": "2027-01-15",
+      "next_step": "Send the floor samples",
+      "next_step_date": "2027-01-20",
+      "task_id": null,
+      "not_right_person": false
+    }
+  ]
+}
+```
+
+- `id` is the row's first task: the task buttons take it (any of `task_ids` works) and act on the
+  **whole row**. `task_ids` are all its tasks, in list order.
+- `section`: `due` (a "Due now" row: maintenance follow-ups, above the 10 and outside it) | `ten` (the
+  live Friday batch's 10) | `more` (a Give Me 10 More list) | `replaced` (a Friday batch a forced
+  re-run replaced).
+- `kind`, `reason`, `reasons`, `score`, `batch_id` are the first task's: the person suggested first.
+  `kind` is the company's (`new` only while nobody there has had a live talk). `score` is shown to
+  managers only.
+- `status`: a BD row (`ten`, `more`, `replaced`) is `done` once any of its tasks is done (someone
+  there was reached), else `open` while any is open, else `snoozed` (taken off); a `due` row is `open`
+  while any task is open (someone there is still due), else `done` when any is done, else `snoozed`.
+  A row of several tasks comes from a week built before #828, a #810 move or a #811 merge.
+  `done_at` / `snoozed_until` are the first of its tasks that has one.
+- `misses` and `last_live_at` are the **company's**, over everyone there who is not archived, whoever
+  owns them, as of today (Central): the misses since the last live talk with anyone there. The page
+  words it "Never reached after N tries" when `last_live_at` is null, else "N tries since the last
+  live talk".
+- `people`: the people the row's tasks are for first, in task order (the first is the person to call
+  first), then the other people **the week's owner** owns at the company on the row's tab
+  (maintenance for a `due` row, else BD) who are not archived, by name; anyone marked not the right
+  person on this row goes last, so the first person (whom the row's Call dials) can still be the right
+  one. Each person's
+  `last_live_at` and `attempts_since_live` are their own; `task_id` is this row's task for them, or
+  null; `not_right_person` is true once they were marked not the right person on this row.
 
 ### Recommendation
 
@@ -722,9 +830,10 @@ salesperson 404 `"<name> has no weekly list. Only salespeople do."`; an assistan
 
 #### `POST /api/bd/week/ten-more` (salesperson)
 
-Body `{ "owner"? }`. A `ten_more` batch of this week with the next 10 by the ranking (due maintenance
-first, then by score), leaving out anyone on this week's lists in any state and anyone still open on a
-later week's list. Answers `{ "ok": true, "week": WeekView }` for the week it was built in. A
+Body `{ "owner"? }`. A `ten_more` batch of this week with the next 10 **companies** by the ranking
+(due maintenance first, then by score; one task per BD company), leaving out any company with someone
+on this week's lists in any state or still open on a later week's list, and any company where anyone
+was tried in the last 3 days. It never changes `done_count`/`total`. Answers `{ "ok": true, "week": WeekView }` for the week it was built in. A
 salesperson asks on their own list only (403 `"You can ask for more only on your own list."`); nobody
 left is 409 `"Everyone on your list is already covered this week."`.
 
@@ -735,11 +844,14 @@ left is 409 `"Everyone on your list is already covered this week."`.
 #### `POST /api/bd/tasks/{id}/reopen` (salesperson, own list)
 
 For all three: the task is looked up first (404 `"That task does not exist."`), then the role (403),
-then the list (403 `"That task is on someone else's list."`). `snooze` takes `{ "reason"? }` (text,
-500 characters at most) and runs to the Monday after the task's week. A maintenance task whose contact is still due
-cannot be marked done or skipped: 409 `"A maintenance follow-up stays on the list until you log a
-call, meeting, email or text."`. Done twice is 409 `"That task is already done."`; only an open task
-can be skipped; reopening an open task is 409 `"That task is already open."`.
+then the list (403 `"That task is on someone else's list."`). Each acts on the task's **whole company
+row** (WeekRow, #828): done marks every task of the row done, snooze takes every open one off, reopen
+opens them all, and the state checks read the row's `status`. `snooze` takes `{ "reason"? }` (text,
+500 characters at most) and runs to the Monday after the task's week. A maintenance row with someone
+still due cannot be marked done or skipped: 409 `"A maintenance follow-up stays on the list until you
+log a call, meeting, email or text."`. Done twice is 409 `"That task is already done."`; only an open
+row can be skipped; reopening an open row is 409 `"That task is already open."`. The list is never
+refilled. Each answers with the task named in the path:
 
 - done: `{ "ok": true, "task": { "id", "batch_id", "status": "done", "done_at" }, "done_count", "total" }`
 - snooze: `{ "ok": true, "task": { "id", "status": "snoozed", "snoozed_until" }, "done_count", "total" }`
@@ -747,10 +859,14 @@ can be skipped; reopening an open task is 409 `"That task is already open."`.
 
 #### `POST /api/bd/tasks/{id}/not-right-person` (salesperson, assistant; any list)
 
-Body `{ "note"? }` (text, 2000 characters at most). The role is checked before the task is looked up.
-The contact becomes unconfirmed (the note is added to its notes, an `unconfirmed` event is logged) and
-the task is marked done: `{ "ok": true, "task": { "id", "status": "done", "done_at" },
-"contact": { "id", "confirmed": false, "notes" } }`.
+Body `{ "note"?, "contact_id"? }` (note: text, 2000 characters at most). The role is checked before
+the task is looked up. `contact_id` names the person on the task's company row (WeekRow `people`; any
+one else is 400 with `fields.contact_id` `"Pick someone on this row."`); without it, the task's own
+person. That person becomes unconfirmed (the note is added to their notes, an `unconfirmed` event is
+logged with the task id). The row **stays open while someone else on it can be called** (a phone
+number, and not marked not the right person on this row); with nobody left, every task of the row is
+marked done (#828): `{ "ok": true, "task": { "id", "status", "done_at" }, "contact": { "id",
+"confirmed": false, "notes" } }`, `task` being the task in the path.
 
 #### `POST /api/bd/admin/weekly/run` (admin)
 
@@ -771,9 +887,11 @@ The contact's timeline, newest first: `{ "ok": true, "items": [{ "type": "intera
 #### `POST /api/bd/contacts/{id}/interactions` (salesperson; an assistant logs notes only)
 
 Body `{ "kind", "outcome"?, "occurred_at"?, "direction"?, "duration_s"?, "summary"?, "transcript"? }`.
-`occurred_at` defaults to now and may not be after today (Central). A call, voicemail, meeting or
-hosted event closes this week's new or follow-up task for the contact; anything but a note closes its
-maintenance tasks once the contact is no longer due. Answers `{ "ok": true, "interaction": Interaction,
+`occurred_at` defaults to now and may not be after today (Central). A call (any outcome), voicemail,
+meeting or hosted event closes the contact's **company row** (#828): every open new or follow-up task
+this week of anyone at the contact's company, any list, so a second call to someone else there the same
+week moves nothing; `task` is the contact's own task it closed, else the first one, else null. Anything
+but a note closes the contact's maintenance tasks once the contact is no longer due. Answers `{ "ok": true, "interaction": Interaction,
 "contact": Contact, "task": { "id", "status", "done_at" } | null, "recommendation": Recommendation |
 null, "missed_call": bool }`. A manager is 403; an assistant logging anything but a note is 403
 `"Assistants can add notes only."`.
