@@ -762,3 +762,23 @@ def test_a_company_link_opens_the_page_that_holds_it(tmp_path):
     out = run(tmp_path, me("salesperson"), search="?company=128", bd=many(30))
     assert ids_of(out) == list(range(125, 130))
     assert '<div class="ct-acct is-open" data-acct="128" data-tab="bd">' in markup(out, "ct-list")
+
+
+def test_a_page_change_keeps_the_other_keys_in_the_address(tmp_path):
+    """The address can carry keys this page does not own (the tool's d=<draft id>); a page change keeps
+    them as written and only rewrites its own (tab, q, filter, page, and the one-off company)."""
+    out = run(tmp_path, me("salesperson"), search="?d=abc&page=2", bd=many(30),
+              events=[{"id": "ct-pager", "type": "click", "attrs": {"data-page": "prev"}}])
+    assert ids_of(out)[0] == 100
+    assert out["addresses"][-1] == "/bd/contacts.html?d=abc"
+
+
+def test_a_company_link_with_a_search_opens_the_search_page_that_holds_it(tmp_path):
+    """?company= with ?q=: the page is the one of the search's hits that holds the company, not the
+    one of the whole tab."""
+    accts = many(60)
+    out = run(tmp_path, me("salesperson"), search="?company=125&q=test", bd=accts,
+              search_answer=hits_for(accts[20:60]))
+    assert ids_of(out) == list(range(120, 145)), "account 125 is the 6th hit: page 1"
+    assert '<div class="ct-acct is-open" data-acct="125" data-tab="bd">' in markup(out, "ct-list")
+    assert out["addresses"][-1] == "/bd/contacts.html?q=test"

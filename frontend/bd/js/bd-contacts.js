@@ -161,14 +161,27 @@
   }
 
   // ── the address ────────────────────────────────────────────────────────────────────────────
+  // The keys this page writes. ?company= is read once on load and dropped, so a Refresh keeps the
+  // page shown rather than jumping back to the company's. Any other key (the tool's d=) is kept.
+  var OWN_KEYS = ["tab", "q", "filter", "page", "company"];
+
   function syncUrl() {
     var p = [];
+    try {
+      p = String(window.location.search || "").replace(/^\?/, "").split("&").filter(function (piece) {
+        if (!piece) return false;
+        var k = piece.split("=")[0];
+        try { k = decodeURIComponent(k.replace(/\+/g, " ")); } catch (e) { /* as written */ }
+        return OWN_KEYS.indexOf(k) < 0;
+      });
+    } catch (e) { p = []; }
     if (S.tab !== "bd") p.push("tab=" + S.tab);
     if (S.q) p.push("q=" + encodeURIComponent(S.q));
     else if (S.tab === "bd" && S.chip === "dupes") p.push("filter=dupes");
     if (S.page > 1) p.push("page=" + S.page);
     try {
-      window.history.replaceState(null, "", window.location.pathname + (p.length ? "?" + p.join("&") : ""));
+      window.history.replaceState(null, "", window.location.pathname + (p.length ? "?" + p.join("&") : "") +
+        (window.location.hash || ""));
     } catch (e) { /* the address just stays */ }
   }
 
@@ -1172,9 +1185,15 @@
     if (!t) return null;
     S.tab = t;
     S.open[key(t, id)] = true;
-    var at = shown().map(function (a) { return String(a.id); }).indexOf(String(id));
-    if (at !== -1) S.page = Math.floor(at / PAGE_ROWS) + 1;
+    // With a search in the link, the page comes from its hits once they arrive (pageOf after search).
+    if (!S.q) { var pg = pageOf(id); if (pg) S.page = pg; }
     return "ct-a-" + t + "-" + id;
+  }
+
+  /** The page of the list shown now that holds account `id`, or 0 when it is not in it. */
+  function pageOf(id) {
+    var at = shown().map(function (a) { return String(a.id); }).indexOf(String(id));
+    return at === -1 ? 0 : Math.floor(at / PAGE_ROWS) + 1;
   }
 
   var auth = window.TWAuth;
@@ -1200,7 +1219,15 @@
     wire();
     return Promise.all([loadLists(), loadExtras(), loadDupes()]).then(function () {
       var target = company ? openCompany(company) : null;
-      if (S.q) return search(S.q);
+      if (S.q) {
+        return search(S.q).then(function () {
+          var pg = target && S.hits ? pageOf(company) : 0;
+          if (!pg || pg === S.page) return;
+          S.page = pg;
+          render();
+          syncUrl();
+        });
+      }
       render();
       var el = target && $(target);
       if (el && el.scrollIntoView) el.scrollIntoView({ block: "center" });
