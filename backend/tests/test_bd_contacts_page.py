@@ -679,6 +679,26 @@ def test_a_page_past_the_end_shows_the_last_page_and_says_so_in_the_address(tmp_
 def test_a_page_that_is_not_a_page_number_is_the_first(tmp_path, raw):
     out = run(tmp_path, me("salesperson"), search="?page=" + raw, bd=many(30), name="raw")
     assert ids_of(out)[0] == 100
+    assert out["addresses"][-1:] == ["/bd/contacts.html"], "page 1 leaves page= out of the address"
+
+
+def test_page_1_in_the_address_is_dropped_from_it(tmp_path):
+    out = run(tmp_path, me("salesperson"), search="?page=1", bd=many(30))
+    assert ids_of(out)[0] == 100
+    assert out["addresses"][-1:] == ["/bd/contacts.html"]
+
+
+@pytest.mark.parametrize("raw", ["abc", "0", "007", ""])
+def test_a_page_that_is_not_a_page_number_leaves_the_address_keeping_the_other_keys(tmp_path, raw):
+    out = run(tmp_path, me("salesperson"), search="?d=abc&page=" + raw, bd=many(30), name="raw-d")
+    assert ids_of(out)[0] == 100
+    assert out["addresses"][-1:] == ["/bd/contacts.html?d=abc"]
+
+
+def test_a_page_in_the_address_that_is_shown_writes_nothing(tmp_path):
+    out = run(tmp_path, me("salesperson"), search="?page=2", bd=many(30))
+    assert ids_of(out)[0] == 125
+    assert out["addresses"] == [], "the address already says what is shown"
 
 
 def test_next_shows_the_next_page_writes_it_in_the_address_focuses_its_first_row_and_says_which(tmp_path):
@@ -762,6 +782,13 @@ def test_a_company_link_opens_the_page_that_holds_it(tmp_path):
     out = run(tmp_path, me("salesperson"), search="?company=128", bd=many(30))
     assert ids_of(out) == list(range(125, 130))
     assert '<div class="ct-acct is-open" data-acct="128" data-tab="bd">' in markup(out, "ct-list")
+    assert out["addresses"][-1:] == ["/bd/contacts.html?page=2"], "the page shown, and company= dropped"
+
+
+def test_a_company_link_on_the_first_page_drops_company_from_the_address(tmp_path):
+    out = run(tmp_path, me("salesperson"), search="?d=abc&company=17&tab=bd")
+    assert '<div class="ct-acct is-open" data-acct="17" data-tab="maintenance">' in markup(out, "ct-list")
+    assert out["addresses"][-1:] == ["/bd/contacts.html?d=abc&tab=maintenance"]
 
 
 def test_a_page_change_keeps_the_other_keys_in_the_address(tmp_path):

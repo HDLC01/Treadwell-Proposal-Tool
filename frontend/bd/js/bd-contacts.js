@@ -1229,6 +1229,9 @@
         });
       }
       render();
+      // The address says the page shown: a company link drops company= (and names its page), and
+      // page=1 or a page= that is no page number goes. A page= that is the page shown is left alone.
+      if (company || BD.qs("page") !== (S.page > 1 ? String(S.page) : null)) syncUrl();
       var el = target && $(target);
       if (el && el.scrollIntoView) el.scrollIntoView({ block: "center" });
       return null;
