@@ -4,7 +4,7 @@ BD's test_e2e_chrome, rewritten. BD's own rail, phone tab bar, More sheet and to
 BD pages wear the proposal tool's sidebar, and BD's sections sit inside it, indented under a
 collapsible "BD CRM" row. What a person sees:
 
-  * Desktop: the BD CRM row (BETA) is the one lit row on every /bd/ page, its group is open, and the
+  * Desktop: the BD CRM row is the one lit row on every /bd/ page, its group is open, and the
     sections are exactly the ones the person's BD role may open, the current one lit by full path.
     That is This Week, Add contact (#808), Potential BD Contacts, Analytics and Admin (#809), each
     only for the roles BD's can() gives it to.
@@ -105,7 +105,13 @@ def test_on_the_bd_home_the_bd_row_is_the_one_lit_row_and_its_group_is_open(env,
         assert lit.count() == 1, "exactly one sidebar row is lit"
         assert lit.get_attribute("href") == "/bd/"
         assert lit.locator(".tw-nav-label").inner_text() == "BD CRM"
-        assert lit.locator(".tw-nav-tag").inner_text() == "BETA"
+        # No BETA tag since 2026-11-24 (Hanz: "put the BD CRM to the sidebar not as beta"), and it
+        # sits in the daily list, under the Active heading, not under Beta.
+        assert lit.locator(".tw-nav-tag").count() == 0
+        assert page.evaluate("""() => { const a = document.querySelector('#tw-sidebar .tw-nav-item[href="/bd/"]');
+            let el = a; while (el && !(el.classList && el.classList.contains('tw-section'))) {
+              el = el.previousElementSibling || el.parentElement; }
+            return el ? el.textContent.trim() : null; }""") == "Active"
         chev = page.locator("#tw-bd-chev")
         assert chev.evaluate("e => e.tagName") == "BUTTON"
         assert chev.get_attribute("aria-expanded") == "true"
