@@ -1581,6 +1581,28 @@ def test_a_redraw_keeps_focus_on_show(page_as, expect):
     expect(pg.locator(BANNER + ' [data-act="show-due"]')).to_be_focused()
 
 
+def test_when_a_refresh_takes_the_banner_away_from_under_show_focus_stays_on_the_page(page_as, expect):
+    """Focus is on Show while a held refresh (the one "Done, nothing to log" on Dana starts) comes back
+    with nothing due: Hal was followed up elsewhere meanwhile, so Next up's Call (his) goes with the
+    repaint. Focus lands on a control on show after the repaint, never on <body>."""
+    _, pg = page_as("/bd/", AVERY)
+    wait_week(pg)
+    pg.evaluate("() => { window.__hold = false; window.__gate = new Promise(r => { window.__open = r; });"
+                " const get = BDApi.get; BDApi.get = (p, ...a) => window.__hold && p.indexOf('/api/bd/week') === 0"
+                " ? window.__gate.then(() => get.call(BDApi, p, ...a)) : get.call(BDApi, p, ...a); }")
+    pg.evaluate("() => { window.__hold = true; }")
+    choose(pg, node(pg, DANA), "done")
+    expect(pg.locator('#wk-done [data-task="%d"][data-status="done"]' % DANA)).to_be_visible()
+    log_by_api(pg, HAL_C, "call", "voicemail")      # Hal followed up elsewhere: the week now has 0 due
+    pg.locator(BANNER + ' [data-act="show-due"]').focus()
+    pg.evaluate("() => { window.__open(); }")
+    expect(pg.locator(BANNER)).to_be_hidden()
+    expect(node(pg, HAL)).to_have_attribute("data-status", "done")
+    settled(pg)
+    assert focus_is_on_the_page(pg), pg.evaluate("() => document.activeElement && document.activeElement.outerHTML.slice(0, 120)")
+    assert pg.evaluate("() => document.activeElement.getClientRects().length > 0"), "focus is on a control on show"
+
+
 def test_the_banner_goes_at_once_when_the_last_due_row_is_followed_up(page_as, expect):
     """A voicemail on Hal follows up Kaw Valley: the banner goes from what the save returned, even when
     every later read of the week fails, and the change is said in the page's live region."""

@@ -46,7 +46,8 @@
  * The maintenance banner (#wk-due-banner, under the page header, above the progress card): while the
  * list being looked at has open "Due now" rows it says "N maintenance account(s) due this week" (the
  * same count as the "Due now" line, dueNow()) and offers Show, which only moves focus (and scrolls)
- * to the first due row: Next up when that is a "Due now" row, else the "Due now" heading. It follows
+ * to the first due row: Next up, which parts() always makes the first open "Due now" row (the "Due
+ * now" heading is only a fallback in case that ever changes). It follows
  * the count at once (applyRow), is redrawn for the list "Whose list" switches to, and is absent at 0,
  * while loading, on a load error and before a list is chosen. A count change after the list's first
  * paint is said in #live; a redraw with the same count says nothing.
@@ -103,6 +104,7 @@
     moreMsg: "",       // the 409 sentence under Give me 10 more
     offNow: {},        // row ids taken off in this page view (their Undo is shown)
     dueSaid: null,     // the "Due now" count the banner last drew for this list (null: not drawn yet)
+    bannerLostFocus: false, // the banner went (or lost Show) while it held focus: renderAll re-homes it
     doneSaid: null,    // the "N of 10 done" words last put in #live for this list
   };
 
@@ -641,8 +643,9 @@
 
   function dueWords(n) { return plural(n, "maintenance account") + " due this week"; }
 
-  /** The id of the first due row on show, for Show: Next up when it is a "Due now" row, else the
-   *  "Due now" heading; null when neither is drawn. */
+  /** The id of the first due row on show, for Show. Next up is always the first open "Due now" row
+   *  (parts()), so this is wk-next; wk-due-h is a fallback in case parts() ever stops putting due
+   *  rows first. null when neither is drawn. */
   function dueTarget() {
     var p = parts();
     if (p.next && isMaint(p.next)) return "wk-next";
@@ -664,9 +667,11 @@
     if (liveEl && was != null && was !== n) {
       liveEl.textContent = n > 0 ? dueWords(n) + "." : "No maintenance accounts due this week.";
     }
-    // A redraw replaces Show: focus on it goes back to the new one, never to <body>.
+    // A redraw replaces Show: focus on it goes back to the new one, never to <body>. When Show goes,
+    // the fallback waits for renderAll: picked now, it would be a node of the lists about to be
+    // repainted (often Next up's Call on the very due row that has just closed).
     var hadFocus = bannerEl.contains(document.activeElement);
-    if (!(n > 0)) { hideBanner(); if (hadFocus) focusShown([]); return; }
+    if (!(n > 0)) { hideBanner(); if (hadFocus) S.bannerLostFocus = true; return; }
     var target = dueTarget();
     bannerEl.innerHTML = '<span class="wk-due-banner-ico">' + icon("bell", 20) + "</span>" +
       '<div class="wk-due-banner-text"><h2 class="wk-due-banner-title" id="wk-due-banner-h">' + esc(dueWords(n)) + "</h2>" +
@@ -676,7 +681,7 @@
     bannerEl.hidden = false;
     if (hadFocus) {
       var show = bannerEl.querySelector('[data-act="show-due"]');
-      if (show) { try { show.focus({ preventScroll: true }); } catch (e) { show.focus(); } } else focusShown([]);
+      if (show) { try { show.focus({ preventScroll: true }); } catch (e) { show.focus(); } } else S.bannerLostFocus = true;
     }
   }
 
@@ -1134,6 +1139,11 @@
     renderBanner();
     renderMain();
     renderTray();
+    if (S.bannerLostFocus) {
+      S.bannerLostFocus = false;
+      var a = document.activeElement;
+      if (!a || a === document.body || !document.contains(a)) focusShown([]);
+    }
     maybeNextWeek();
   }
 
