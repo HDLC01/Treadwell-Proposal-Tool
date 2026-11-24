@@ -1033,6 +1033,29 @@ def test_the_list_shows_25_accounts_a_page_and_next_and_previous_move_through_th
     assert first_toggle_focused(pg)
 
 
+TOP_BAR = 52  # the tool's fixed top bar (auth.js #tw-topbar)
+
+
+@pytest.mark.parametrize("viewport", [DESKTOP, PHONE], ids=["1280", "390"])
+def test_a_full_next_page_scrolls_back_to_the_top_of_the_list(env, page_as, expect, viewport):
+    """60 more accounts make 68, so page 2 is a full 25 rows and the page stays long: the browser does
+    not scroll back on its own, the page's own scroll has to bring the list's top out from under the
+    top bar, with the focused first row on screen."""
+    add_accounts(env[1], 60)
+    _, pg = page_as("/bd/contacts.html", AVERY, viewport)
+    pg.add_style_tag(content=DEJAVU)
+    expect(accounts(pg)).to_have_count(25)
+    nav = pager_of(pg)
+    nav.get_by_role("button", name="Next").click()
+    expect(nav.locator(".ct-range")).to_have_text("26–50 of 68")
+    expect(accounts(pg)).to_have_count(25)
+    assert first_toggle_focused(pg)
+    top = pg.locator("#ct-list").evaluate("el => el.getBoundingClientRect().top")
+    assert TOP_BAR <= top <= 120, "the list's top sits just under the top bar: %s" % top
+    box = pg.evaluate("() => { const r = document.activeElement.getBoundingClientRect();"
+                      " return {top: r.top, bottom: r.bottom, h: window.innerHeight}; }")
+    assert TOP_BAR <= box["top"] and box["bottom"] <= box["h"], "the focused first row is on screen: %s" % box
+
 def test_refresh_and_back_keep_the_page_and_opening_an_account_stays_on_it(env, page_as, expect):
     add_accounts(env[1], 20)
     _, pg = page_as("/bd/contacts.html?page=2", AVERY)
