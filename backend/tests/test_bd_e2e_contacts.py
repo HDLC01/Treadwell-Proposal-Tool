@@ -960,3 +960,189 @@ def test_nothing_scrolls_sideways(page_as, viewport):
         pg.locator('[data-tidy="unknown"]').click()
         pg.evaluate("() => document.fonts.ready.then(() => true)")
         assert sideways(pg) <= 1, (email, viewport)
+
+
+# ── 25 account rows a page ────────────────────────────────────────────────────────────────────────
+# The seed has 8 BD accounts, so these tests add made-up ones after them by name ("Test Account 01",
+# ...), one person each (Avery's). 20 more make 28: page 1 is the seed's 8 and Test Account 01 to 17,
+# page 2 is Test Account 18 to 20.
+PHONE_320 = {"width": 320, "height": 700}
+# CI's Linux draws the page in DejaVu Sans, wider than Windows' fonts: a pager that fits in it fits.
+DEJAVU = '#main, #main * { font-family: "DejaVu Sans", sans-serif !important; }'
+
+
+def add_accounts(url, n):
+    from bd.normalize import normalize_company
+    names = ["Test Account %02d" % (i + 1) for i in range(n)]
+    run_sql(url, "with co as (insert into companies (name, normalized_name, city, industry)"
+                 " select n, nn, 'Lawrence', 'Testing' from unnest(%s::text[], %s::text[]) as t(n, nn)"
+                 " returning id, name)"
+                 " insert into contacts (company_id, name, category, frequency_per_year, owner_id)"
+                 " select id, 'Person at ' || name, 'bd', 4, 1 from co",
+            (names, [normalize_company(x) for x in names]))
+
+
+def address(pg):
+    """The page's own keys in the address (the tool's shared.js may add its own draft key, d=)."""
+    from urllib.parse import parse_qsl, urlparse
+    u = urlparse(pg.url)
+    assert u.path == "/bd/contacts.html", u.path
+    return {k: v for k, v in parse_qsl(u.query) if k != "d"}
+
+
+def pager_of(pg):
+    return pg.locator("#ct-pager")
+
+
+def first_toggle_focused(pg):
+    return pg.evaluate("() => { const t = document.querySelector('#ct-list .ct-acct-toggle');"
+                       " return !!t && document.activeElement === t; }")
+
+
+def test_the_list_shows_25_accounts_a_page_and_next_and_previous_move_through_them(env, page_as, expect):
+    add_accounts(env[1], 20)
+    p, pg = page_as("/bd/contacts.html", AVERY)
+    expect(accounts(pg)).to_have_count(25)
+    nav = pager_of(pg)
+    expect(nav).to_be_visible()
+    expect(nav.locator(".ct-range")).to_have_text("1–25 of 28")
+    expect(nav.get_by_role("button", name="Previous")).to_be_disabled()
+    expect(nav.get_by_role("button", name="Page 1")).to_have_attribute("aria-current", "page")
+    expect(pg.locator("#ct-tab-bd")).to_have_text(re.compile(r"BD accounts\s*28"))
+    nav.get_by_role("button", name="Next").click()
+    expect(accounts(pg)).to_have_count(3)
+    assert names(pg) == ["Test Account 18", "Test Account 19", "Test Account 20"]
+    expect(nav.locator(".ct-range")).to_have_text("26–28 of 28")
+    expect(nav.get_by_role("button", name="Next")).to_be_disabled()
+    expect(nav.get_by_role("button", name="Page 2")).to_have_attribute("aria-current", "page")
+    assert address(pg) == {"page": "2"}
+    expect(pg.locator("#bd-live")).to_have_text("Page 2 of 2")
+    assert first_toggle_focused(pg), "focus goes to the page's first row, never the page"
+    top = pg.locator("#ct-list").evaluate("el => el.getBoundingClientRect().top")
+    assert 0 <= top <= 800, "the top of the list is in view: %s" % top
+    expect(pg.locator("#ct-tab-bd")).to_have_text(re.compile(r"BD accounts\s*28")), "the tab counts every account"
+    nav.get_by_role("button", name="Previous").click()
+    expect(accounts(pg)).to_have_count(25)
+    assert address(pg) == {}
+    expect(pg.locator("#bd-live")).to_have_text("Page 1 of 2")
+    assert first_toggle_focused(pg)
+    # a page number, from the keyboard
+    nav.get_by_role("button", name="Page 2").focus()
+    pg.keyboard.press("Enter")
+    expect(accounts(pg)).to_have_count(3)
+    assert first_toggle_focused(pg)
+
+
+def test_refresh_and_back_keep_the_page_and_opening_an_account_stays_on_it(env, page_as, expect):
+    add_accounts(env[1], 20)
+    _, pg = page_as("/bd/contacts.html?page=2", AVERY)
+    assert names(pg) == ["Test Account 18", "Test Account 19", "Test Account 20"]
+    pg.reload()
+    accounts(pg).first.wait_for()
+    assert names(pg) == ["Test Account 18", "Test Account 19", "Test Account 20"]
+    row = accounts(pg).nth(1)
+    row.locator(".ct-acct-toggle").click()
+    expect(row.locator(".ct-acct-toggle")).to_have_attribute("aria-expanded", "true")
+    expect(accounts(pg)).to_have_count(3)
+    assert address(pg) == {"page": "2"}
+    row.locator(".ct-p-name").click()
+    pg.wait_for_url(re.compile(r".*/bd/contact\.html\?id=\d+$"))
+    expect(pg.locator("#cd-title")).to_have_text("Person at Test Account 19")
+    pg.go_back()
+    accounts(pg).first.wait_for()
+    assert names(pg) == ["Test Account 18", "Test Account 19", "Test Account 20"]
+    expect(pager_of(pg).locator(".ct-range")).to_have_text("26–28 of 28")
+
+
+def test_a_page_past_the_end_shows_the_last_page(env, page_as, expect):
+    add_accounts(env[1], 20)
+    _, pg = page_as("/bd/contacts.html?page=40", AVERY)
+    assert names(pg) == ["Test Account 18", "Test Account 19", "Test Account 20"]
+    assert address(pg) == {"page": "2"}
+
+
+def test_a_new_tab_or_search_goes_back_to_page_1_and_search_hits_are_paged(env, page_as, expect):
+    add_accounts(env[1], 30)
+    _, pg = page_as("/bd/contacts.html?page=2", AVERY)
+    expect(accounts(pg)).to_have_count(13)
+    pg.locator("#ct-tab-maintenance").click()
+    expect(accounts(pg)).to_have_count(1)
+    expect(pager_of(pg)).to_be_hidden()
+    assert address(pg) == {"tab": "maintenance"}
+    pg.locator("#ct-tab-bd").click()
+    expect(accounts(pg)).to_have_count(25)
+    pager_of(pg).get_by_role("button", name="Next").click()
+    expect(accounts(pg)).to_have_count(13)
+    search(pg, "test account")
+    expect(pg.locator("#ct-count")).to_contain_text("30 accounts")
+    expect(accounts(pg)).to_have_count(25)
+    expect(pager_of(pg).locator(".ct-range")).to_have_text("1–25 of 30")
+    assert address(pg) == {"q": "test account"}
+    pager_of(pg).get_by_role("button", name="Next").click()
+    expect(accounts(pg)).to_have_count(5)
+    assert names(pg) == ["Test Account 26", "Test Account 27", "Test Account 28", "Test Account 29", "Test Account 30"]
+    assert address(pg) == {"q": "test account", "page": "2"}
+
+
+def test_a_move_stays_on_the_page_and_an_emptied_last_page_falls_back_a_page(env, page_as, expect):
+    """27 accounts: page 2 holds Test Account 18 and 19. Making 19 a maintenance account leaves page 2
+    with 18; making 18 one empties page 2, so the list shows page 1, now everything on one page."""
+    add_accounts(env[1], 19)
+    _, pg = page_as("/bd/contacts.html?page=2", AVERY)
+    assert names(pg) == ["Test Account 18", "Test Account 19"]
+    for name, left in (("Test Account 19", ["Test Account 18"]), ("Test Account 18", None)):
+        row = accounts(pg).filter(has=pg.locator(".ct-acct-name", has_text=name))
+        row.locator("[data-more]").click()
+        pg.locator('.menu [data-act="to-maintenance"]').click()
+        pg.locator(".dialog.is-open").get_by_role("button", name="Make maintenance account").click()
+        expect(toasts(pg)).to_contain_text(name + " is a maintenance account.")
+        if left:
+            expect(accounts(pg)).to_have_count(1)
+            assert names(pg) == left
+            assert address(pg) == {"page": "2"}
+            expect(pager_of(pg).locator(".ct-range")).to_have_text("26–26 of 26")
+        else:
+            expect(accounts(pg)).to_have_count(25)
+            expect(pager_of(pg)).to_be_hidden()
+            assert address(pg) == {}
+    expect(pg.locator("#ct-tab-maintenance")).to_have_text(re.compile(r"Maintenance\s*3"))
+
+
+@pytest.mark.parametrize("viewport", [PHONE, PHONE_320], ids=["390", "320"])
+def test_on_a_phone_the_pager_is_previous_page_n_of_m_and_next_with_nothing_sideways(env, page_as, expect, viewport):
+    add_accounts(env[1], 200)          # 208 accounts, 9 pages: the desktop would show an ellipsis
+    _, pg = page_as("/bd/contacts.html?page=3", AVERY, viewport)
+    pg.add_style_tag(content=DEJAVU)
+    pg.evaluate("() => document.fonts.ready.then(() => true)")
+    nav = pager_of(pg)
+    expect(nav.locator(".ct-range")).to_have_text("51–75 of 208")
+    expect(nav.locator(".ct-pg-of")).to_have_text("Page 3 of 9")
+    expect(nav.locator(".ct-pg-num").first).to_be_hidden()
+    prev, nxt = nav.get_by_role("button", name="Previous"), nav.get_by_role("button", name="Next")
+    expect(prev).to_be_visible()
+    expect(nxt).to_be_visible()
+    a, b, of = prev.bounding_box(), nxt.bounding_box(), nav.locator(".ct-pg-of").bounding_box()
+    assert abs(a["y"] - b["y"]) <= 2 and abs(of["y"] + of["height"] / 2 - (a["y"] + a["height"] / 2)) <= 4, \
+        "Previous, Page N of M and Next share one line"
+    assert a["height"] >= 44 and b["height"] >= 44, (a, b)
+    assert b["x"] + b["width"] <= viewport["width"] - 8, b
+    assert sideways(pg) <= 1, "scrolls sideways by %dpx" % sideways(pg)
+    nxt.click()
+    expect(nav.locator(".ct-pg-of")).to_have_text("Page 4 of 9")
+    assert first_toggle_focused(pg)
+    assert sideways(pg) <= 1
+
+
+def test_at_1280_many_pages_fit_one_line_in_dejavu_sans(env, page_as, expect):
+    add_accounts(env[1], 250)          # 258 accounts, 11 pages
+    _, pg = page_as("/bd/contacts.html?page=6", AVERY)
+    pg.add_style_tag(content=DEJAVU)
+    pg.evaluate("() => document.fonts.ready.then(() => true)")
+    nav = pager_of(pg)
+    expect(nav.locator(".ct-range")).to_have_text("126–150 of 258")
+    labels = nav.locator(".ct-pages > *").evaluate_all(
+        "els => els.filter(e => getComputedStyle(e).display !== 'none').map(e => e.textContent.trim())")
+    assert labels == ["Previous", "1", "…", "5", "6", "7", "…", "11", "Next"]
+    ys = nav.locator(".ct-pages > .btn").evaluate_all("els => els.map(e => Math.round(e.getBoundingClientRect().top))")
+    assert len(set(ys)) == 1, ys
+    assert sideways(pg) <= 1

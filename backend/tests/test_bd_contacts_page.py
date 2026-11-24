@@ -46,7 +46,8 @@ PEOPLE = {"salesperson": (1, "Avery Quill"), "assistant": (3, "Casey Moret"), "m
           "admin": (5, "Emery Stoll"), "super_admin": (6, "Frankie Oduya")}
 
 IDS = ["ct-note", "ct-sub", "ct-import", "ct-import-file", "ct-add", "ct-tidy", "ct-tidy-cards", "ct-unknown",
-       "ct-tab-bd", "ct-tab-maintenance", "ct-tools", "ct-q", "ct-sort", "ct-chips", "ct-count", "ct-dupes", "ct-list"]
+       "ct-tab-bd", "ct-tab-maintenance", "ct-tools", "ct-tabs", "ct-q", "ct-sort", "ct-chips", "ct-count", "ct-dupes",
+       "ct-list", "ct-pager", "bd-live"]
 
 AVERY = {"id": 1, "name": "Avery Quill"}
 BLAIR = {"id": 2, "name": "Blair Fenn"}
@@ -117,10 +118,11 @@ def page_scripts():
     return [s.lstrip("/") for s in srcs if s.startswith("/bd/")]
 
 
-def run(tmp_path, bd_me, search="", search_answer=None, bd=None, maint=None, name="s", dupes=None):
+def run(tmp_path, bd_me, search="", search_answer=None, bd=None, maint=None, name="s", dupes=None, events=(), ids=()):
     """The page, started as `bd_me`, at contacts.html`search`. The harness answers a route by its path,
     so the two tabs' answers are told apart by a stand-in that the page's own category picks. `dupes`
-    is the duplicates route's whole answer ({status, body}); left out, that route is not there (404)."""
+    is the duplicates route's whole answer ({status, body}); left out, that route is not there (404).
+    `events` are sent once the page has drawn (the harness's events); `ids` are more elements to report."""
     require_node()
     res = responses(search_answer)
     if dupes is not None:
@@ -129,7 +131,8 @@ def run(tmp_path, bd_me, search="", search_answer=None, bd=None, maint=None, nam
     m_items = [KAW] if maint is None else maint
     res.pop("GET /api/bd/contacts/accounts")
     sc = {"scripts": ["js/crm-core.js"] + page_scripts(), "token": "tok", "ready": True, "bdMe": bd_me,
-          "now": MORNING, "ids": IDS, "responses": res, "search": search, "pathname": "/bd/contacts.html",
+          "now": MORNING, "ids": IDS + list(ids), "responses": res, "search": search, "pathname": "/bd/contacts.html",
+          "events": list(events),
           "byQuery": {"GET /api/bd/contacts/accounts": {
               "category=bd": ok({"category": "bd", "total": len(bd_items), "items": bd_items}),
               "category=maintenance": ok({"category": "maintenance", "total": len(m_items), "items": m_items})}}}
@@ -590,3 +593,172 @@ def test_a_tab_is_read_page_by_page_until_the_total(tmp_path):
                           "GET /api/bd/contacts/accounts?category=bd&limit=500&offset=1",
                           "GET /api/bd/contacts/accounts?category=maintenance&limit=500&offset=0"]
     assert rows(out)[0] == [(10, "bd"), (16, "bd")]
+
+
+# ── 25 account rows a page (the pager) ────────────────────────────────────────────────────────────
+# A "row" is one account (company) row; the people inside an opened one do not count. The page still
+# reads every account (the 500-row paging above) and splits the list itself, as Plan vs Actual does
+# (#819). Made-up accounts, one person each, in the server's order (by name): Test Account 01, 02, ...
+def many(n, tab="bd", start=100):
+    return [{"id": start + i, "name": "Test Account %02d" % (i + 1), "city": "Lawrence", "industry": "Testing",
+             "category": tab, "people_count": 1, "owner": AVERY, "other_owners": 0, "last_live_at": None,
+             "people": [person(1000 + start + i, "Test Person %02d" % (i + 1), AVERY, category=tab)]}
+            for i in range(n)]
+
+
+def ids_of(out):
+    return [a for a, _ in rows(out)[0]]
+
+
+def pager(out):
+    """(the range words, [(data-page, visible words, disabled, aria-current)] for each button, [gap words])."""
+    html = markup(out, "ct-pager")
+    m = re.search(r'<span class="ct-range"[^>]*>(.*?)</span>', html, re.S)
+    btns = [(b.group(1), words_of(b.group(3)), " disabled" in b.group(2), 'aria-current="page"' in b.group(2))
+            for b in re.finditer(r'<button[^>]*data-page="([^"]+)"([^>]*)>(.*?)</button>', html, re.S)]
+    gaps = [words_of(g) for g in re.findall(r'<span class="ct-pg-gap[^"]*"[^>]*>(.*?)</span>', html, re.S)]
+    return (words_of(m.group(1)) if m else None), btns, gaps
+
+
+def phone_words(out):
+    """The words a phone shows between Previous and Next."""
+    m = re.search(r'<span class="ct-pg-of">(.*?)</span>', markup(out, "ct-pager"), re.S)
+    return words_of(m.group(1)) if m else None
+
+
+def test_26_accounts_show_25_on_the_first_page_with_the_pager_under_them(tmp_path):
+    out = run(tmp_path, me("salesperson"), bd=many(26))
+    assert ids_of(out) == list(range(100, 125)), "the first 25, in the server's order"
+    assert shown(out, "ct-pager")
+    rng, btns, gaps = pager(out)
+    assert rng == "1–25 of 26"
+    assert btns == [("prev", "Previous", True, False), ("1", "1", False, True), ("2", "2", False, False),
+                    ("next", "Next", False, False)]
+    assert gaps == []
+    assert re.search(r'data-page="prev"[^>]* disabled aria-disabled="true"', markup(out, "ct-pager"))
+    assert phone_words(out) == "Page 1 of 2"
+    assert text(out, "ct-tab-bd") == "BD accounts 26", "the tab counts every account, not the page"
+
+
+def test_the_second_page_holds_the_26th_and_next_is_off(tmp_path):
+    out = run(tmp_path, me("salesperson"), search="?page=2", bd=many(26))
+    assert ids_of(out) == [125]
+    rng, btns, _ = pager(out)
+    assert rng == "26–26 of 26"
+    assert [(b[0], b[2], b[3]) for b in btns] == [("prev", False, False), ("1", False, False), ("2", False, True),
+                                                   ("next", True, False)]
+    assert phone_words(out) == "Page 2 of 2"
+
+
+def test_everything_on_one_page_has_no_pager(tmp_path):
+    out = run(tmp_path, me("salesperson"), bd=many(25))
+    assert len(ids_of(out)) == 25
+    assert not shown(out, "ct-pager")
+
+
+def test_many_pages_show_the_ends_and_the_pages_around_with_ellipses(tmp_path):
+    out = run(tmp_path, me("manager"), search="?page=6", bd=many(256))
+    assert ids_of(out) == list(range(225, 250))
+    rng, btns, gaps = pager(out)
+    assert rng == "126–150 of 256"
+    assert [b[1] for b in btns] == ["Previous", "1", "5", "6", "7", "11", "Next"]
+    assert [b[1] for b in btns if b[3]] == ["6"]
+    assert gaps == ["…", "…"]
+    assert re.findall(r'aria-label="(Page \d+)"', markup(out, "ct-pager")) == [
+        "Page 1", "Page 5", "Page 6", "Page 7", "Page 11"]
+
+
+def test_a_page_past_the_end_shows_the_last_page_and_says_so_in_the_address(tmp_path):
+    out = run(tmp_path, me("salesperson"), search="?page=9", bd=many(30))
+    assert ids_of(out) == list(range(125, 130))
+    assert pager(out)[0] == "26–30 of 30"
+    assert out["addresses"][-1:] == ["/bd/contacts.html?page=2"]
+
+
+@pytest.mark.parametrize("raw", ["0", "abc", "-1", "2.5"])
+def test_a_page_that_is_not_a_page_number_is_the_first(tmp_path, raw):
+    out = run(tmp_path, me("salesperson"), search="?page=" + raw, bd=many(30), name="raw")
+    assert ids_of(out)[0] == 100
+
+
+def test_next_shows_the_next_page_writes_it_in_the_address_focuses_its_first_row_and_says_which(tmp_path):
+    out = run(tmp_path, me("salesperson"), bd=many(30), ids=["ct-a-bd-125", "ct-a-bd-100"],
+              events=[{"id": "ct-pager", "type": "click", "attrs": {"data-page": "next"}, "wait": 80}])
+    assert ids_of(out) == list(range(125, 130))
+    assert pager(out)[0] == "26–30 of 30"
+    assert out["addresses"][-1] == "/bd/contacts.html?page=2"
+    assert out["focused"][-1] == "ct-a-bd-125"
+    assert text(out, "bd-live") == "Page 2 of 2"
+
+
+def test_previous_and_a_page_number_go_back_and_page_1_leaves_the_address_plain(tmp_path):
+    out = run(tmp_path, me("salesperson"), search="?page=3", bd=many(60), ids=["ct-a-bd-125", "ct-a-bd-100"],
+              events=[{"id": "ct-pager", "type": "click", "attrs": {"data-page": "prev"}},
+                      {"id": "ct-pager", "type": "click", "attrs": {"data-page": "1"}, "wait": 80}])
+    assert ids_of(out)[0] == 100
+    assert out["addresses"] == ["/bd/contacts.html?page=2", "/bd/contacts.html"]
+    assert out["focused"][-2:] == ["ct-a-bd-125", "ct-a-bd-100"]
+    assert text(out, "bd-live") == "Page 1 of 3"
+
+
+def test_a_disabled_pager_button_does_nothing(tmp_path):
+    out = run(tmp_path, me("salesperson"), bd=many(30),
+              events=[{"id": "ct-pager", "type": "click", "attrs": {"data-page": "prev", "disabled": ""}}])
+    assert ids_of(out)[0] == 100 and out["addresses"] == [] and out["focused"] == []
+
+
+def test_switching_tab_goes_back_to_page_1(tmp_path):
+    out = run(tmp_path, me("salesperson"), search="?page=2", bd=many(30), maint=many(30, "maintenance", 300),
+              events=[{"id": "ct-tabs", "type": "click", "attrs": {"data-tab": "maintenance"}}])
+    assert rows(out)[0][0] == (300, "maintenance")
+    assert out["addresses"][-1] == "/bd/contacts.html?tab=maintenance"
+
+
+def test_the_maintenance_tab_is_paged_too_and_its_page_rides_with_the_tab(tmp_path):
+    out = run(tmp_path, me("salesperson"), search="?tab=maintenance&page=2", maint=many(27, "maintenance", 300),
+              events=[{"id": "ct-pager", "type": "click", "attrs": {"data-page": "1"}},
+                      {"id": "ct-pager", "type": "click", "attrs": {"data-page": "2"}}])
+    assert rows(out)[0] == [(325, "maintenance"), (326, "maintenance")]
+    assert out["addresses"][-2:] == ["/bd/contacts.html?tab=maintenance", "/bd/contacts.html?tab=maintenance&page=2"]
+
+
+def hits_for(accts):
+    return {"total": len(accts), "items": [{"tab": "bd", "account": {"id": a["id"], "name": a["name"]},
+                                            "account_match": True, "people": []} for a in accts]}
+
+
+def test_typing_a_search_goes_back_to_page_1_and_its_hits_are_paged(tmp_path):
+    accts = many(40)
+    out = run(tmp_path, me("salesperson"), search="?page=2", bd=accts, search_answer=hits_for(accts[:30]),
+              events=[{"id": "ct-q", "type": "input", "value": "test", "wait": 400}])
+    assert ids_of(out) == list(range(100, 125))
+    assert pager(out)[0] == "1–25 of 30"
+    assert out["addresses"][-1] == "/bd/contacts.html?q=test"
+
+
+def test_a_search_in_the_address_keeps_its_page(tmp_path):
+    accts = many(40)
+    out = run(tmp_path, me("salesperson"), search="?q=test&page=2", bd=accts, search_answer=hits_for(accts[:30]))
+    assert ids_of(out) == list(range(125, 130))
+    assert pager(out)[0] == "26–30 of 30"
+    assert out["addresses"][-1] == "/bd/contacts.html?q=test&page=2"
+
+
+def test_a_filter_goes_back_to_page_1(tmp_path):
+    out = run(tmp_path, me("salesperson"), search="?page=2", bd=many(60),
+              events=[{"id": "ct-chips", "type": "click", "attrs": {"data-chip": "mine"}}])
+    assert ids_of(out)[0] == 100 and pager(out)[0] == "1–25 of 60"
+    assert out["addresses"][-1] == "/bd/contacts.html"
+
+
+def test_a_new_sort_goes_back_to_page_1(tmp_path):
+    out = run(tmp_path, me("salesperson"), search="?page=2", bd=many(60),
+              events=[{"id": "ct-sort", "type": "change", "value": "people"}])
+    assert ids_of(out)[0] == 100
+    assert out["addresses"][-1] == "/bd/contacts.html"
+
+
+def test_a_company_link_opens_the_page_that_holds_it(tmp_path):
+    out = run(tmp_path, me("salesperson"), search="?company=128", bd=many(30))
+    assert ids_of(out) == list(range(125, 130))
+    assert '<div class="ct-acct is-open" data-acct="128" data-tab="bd">' in markup(out, "ct-list")
