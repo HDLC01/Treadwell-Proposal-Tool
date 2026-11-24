@@ -263,6 +263,50 @@
     return fmtCount(n) + " " + (Number(n) === 1 ? one : (many || one + "s"));
   }
 
+  // ── the pager: a page splits a list it already has (Contacts' 25 account rows a page) ──
+  // The pattern and the page-number list of Plan vs Actual's pager (#819, js/project-calendar-core.js),
+  // copied here because BD pages load no tool page script.
+  var PAGE_MAX = 999999;          // the highest page the address may name (six digits)
+  var PAGE_GAP = "…";
+
+  /** The page numbers a pager shows: every one up to seven pages, else the first, the last and the
+   *  ones around `page`, with an ellipsis (PAGE_GAP) for each gap (always seven items). */
+  function pageItems(page, pages) {
+    var out = [], i;
+    if (pages <= 7) {
+      for (i = 1; i <= pages; i++) out.push(i);
+      return out;
+    }
+    if (page <= 4) return [1, 2, 3, 4, 5, PAGE_GAP, pages];
+    if (page >= pages - 3) {
+      out = [1, PAGE_GAP];
+      for (i = pages - 4; i <= pages; i++) out.push(i);
+      return out;
+    }
+    return [1, PAGE_GAP, page - 1, page, page + 1, PAGE_GAP, pages];
+  }
+
+  /** The pager for `total` rows at `per` a page, on `page` (a page past the end is the last page,
+   *  anything else odd the first): which rows (start, end: slice(start, end)), "1–25 of 256" ("" for
+   *  no rows), whether Previous and Next can be pressed, and the page numbers. */
+  function pageModel(total, page, per) {
+    var n = typeof total === "number" && isFinite(total) && total > 0 ? Math.floor(total) : 0;
+    var size = typeof per === "number" && per >= 1 ? Math.floor(per) : 25;
+    var pages = Math.max(1, Math.ceil(n / size));
+    var p = typeof page === "number" && isFinite(page) && page >= 1 ? Math.floor(page) : 1;
+    if (p > pages) p = pages;
+    var start = (p - 1) * size;
+    var end = Math.min(n, start + size);
+    return { page: p, pages: pages, per: size, total: n, start: start, end: end,
+      text: n ? fmtCount(start + 1) + "–" + fmtCount(end) + " of " + fmtCount(n) : "",
+      prev: p > 1, next: p < pages, items: pageItems(p, pages) };
+  }
+
+  /** The page an address's ?page= names: a whole number from 1 to PAGE_MAX, written plainly; else 1. */
+  function pageParam(raw) {
+    return typeof raw === "string" && /^[1-9][0-9]{0,5}$/.test(raw) && Number(raw) <= PAGE_MAX ? Number(raw) : 1;
+  }
+
   /** "Marcus" from "Marcus Ebner" (or from an address or a UserRef). */
   function firstName(who) {
     return displayName(who).split(/\s+/).filter(Boolean)[0] || "";
@@ -1120,6 +1164,9 @@
     greeting: greeting,
     plural: plural,
     fmtCount: fmtCount,
+    pageItems: pageItems,
+    pageModel: pageModel,
+    pageParam: pageParam,
     firstName: firstName,
     fmtDay: fmtDay,
     fmtMonthDay: fmtMonthDay,

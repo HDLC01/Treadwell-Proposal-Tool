@@ -19,9 +19,18 @@
  *             ids: ["wk-greeting", ...]                  elements to report
  *             search: "?id=21", pathname: "/bd/contact.html" }   the page's address (#808; default
  *                                                       "" and "/bd/") 
+ *             events: [{id, type, value, attrs, key, wait}]   after the page settles, in order: each
+ *                                                       calls element `id`'s `type` listeners. `value`
+ *                                                       is set on the element first; `attrs` makes the
+ *                                                       event's target a stand-in carrying them, whose
+ *                                                       closest("[name]") / closest('[name="v"]') is
+ *                                                       itself when it has that attribute (else the
+ *                                                       element is the target); then `wait` ms (20).
  * out:      { threw, calls: [{ok} | {error: {message, status, code, fields}}], fetches: [{url, method,
  *             headers, body}], els: {id: {text, html, hidden, attrs}}, globals: {name: typeof},
- *             replaced: [address, ...] }               every location.replace (a role sent home, #807)
+ *             replaced: [address, ...],                every location.replace (a role sent home, #807)
+ *             addresses: [address, ...],               every history.replaceState's address
+ *             focused: [id, ...] }                      every element focused, in order
  */
 const fs = require("fs");
 const path = require("path");
@@ -43,6 +52,7 @@ function stripTags(s) {
 }
 
 const byId = {};
+const focused = [];
 function element(id) {
   const e = {
     id, hidden: false, className: "", attrs: {}, listeners: {},
@@ -58,7 +68,7 @@ function element(id) {
     addEventListener(t, fn) { (e.listeners[t] = e.listeners[t] || []).push(fn); },
     classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
     querySelector() { return null; }, querySelectorAll() { return []; }, appendChild() {},
-    focus() {}, contains() { return false; },
+    focus() { focused.push(id); }, contains() { return false; },
     // #809: the Admin and Analytics pages add a glyph or <option>s to an element that is there.
     insertAdjacentHTML(_where, v) { e.innerHTML = e._html + String(v); },
   };
@@ -99,12 +109,14 @@ function liftBdFailure() {
 
 const never = new Promise(() => {});
 const replaced = [];
+const addresses = [];
 const ctx = {
   console,
   setTimeout, clearTimeout,
   URLSearchParams, URL, Intl, JSON, Math, Promise,
   location: { pathname: SC.pathname || "/bd/", search: SC.search || "", hostname: "proposals.example.com", origin: "https://proposals.example.com",
               replace: (to) => { replaced.push(String(to)); } },
+  history: { replaceState: (_state, _title, to) => { addresses.push(String(to)); } },
   document: {
     title: "", documentElement: element("html"), body: element("body"),
     getElementById: (id) => byId[id] || null,
@@ -143,7 +155,21 @@ for (const rel of SC.scripts || []) {
   }
 }
 
-function settle() { return new Promise((r) => setTimeout(r, 20)); }
+function settle(ms) { return new Promise((r) => setTimeout(r, ms || 20)); }
+
+// An event's target: the element itself, or a stand-in carrying `attrs` (a button inside it).
+function stub(attrs) {
+  const t = {
+    attrs, disabled: Object.prototype.hasOwnProperty.call(attrs, "disabled"),
+    getAttribute(k) { return Object.prototype.hasOwnProperty.call(attrs, k) ? String(attrs[k]) : null; },
+    closest(sel) {
+      const m = /^\[([\w-]+)(?:="([^"]*)")?\]$/.exec(String(sel).trim());
+      if (!m || !Object.prototype.hasOwnProperty.call(attrs, m[1])) return null;
+      return m[2] === undefined || String(attrs[m[1]]) === m[2] ? t : null;
+    },
+  };
+  return t;
+}
 
 (async function main() {
   const calls = [];
@@ -157,11 +183,20 @@ function settle() { return new Promise((r) => setTimeout(r, 20)); }
     }
   }
   await settle();
+  for (const ev of SC.events || []) {
+    const el = byId[ev.id];
+    if (!el) throw new Error("harness: no element " + ev.id + " to send " + ev.type + " to");
+    if ("value" in ev) el.value = ev.value;
+    const target = ev.attrs ? stub(ev.attrs) : el;
+    const e = { type: ev.type, target, currentTarget: el, key: ev.key, detail: ev.detail || 0, preventDefault() {} };
+    for (const fn of el.listeners[ev.type] || []) fn(e);
+    await settle(ev.wait);
+  }
   const els = {};
   for (const id of Object.keys(byId)) {
     els[id] = { text: byId[id].textContent, html: byId[id].innerHTML, hidden: !!byId[id].hidden, attrs: byId[id].attrs };
   }
   const globals = {};
   for (const g of ["BDApi", "BD", "BDCore", "TWIcon", "BD_MOCK", "BDMock", "BDAuth"]) globals[g] = typeof ctx[g];
-  process.stdout.write(JSON.stringify({ threw, calls, fetches, els, globals, replaced }) + "\n");
+  process.stdout.write(JSON.stringify({ threw, calls, fetches, els, globals, replaced, addresses, focused }) + "\n");
 })();

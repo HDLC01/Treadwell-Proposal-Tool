@@ -362,20 +362,31 @@ def test_the_sidebar_has_exactly_three_headings(sidebar):
                                    "/admin.html"], grouped["Settings"]
     # Ten since 2026-09-29: the General Contractor board joined the daily list, under Direct Projects.
     # Eleven since 2026-11-12: the Project Calendar joined it, directly under the Bid Calendar.
-    assert len(grouped["Active"]) == 11, grouped["Active"]
+    # Twelve since 2026-11-24: the BD CRM left Beta for the daily list (Hanz, the day RJ went live on
+    # it: "put the BD CRM to the sidebar not as beta").
+    assert len(grouped["Active"]) == 12, grouped["Active"]
     for beta in beta_hrefs:
         assert beta not in grouped["Active"], "%s leaked into the daily list" % beta
 
 
-def test_the_bd_crm_is_exactly_one_new_beta_row_with_a_glyph_of_its_own(sidebar):
-    """#806 (spec #802): ONE "BD CRM" row, first under Beta, tagged BETA, with a glyph no other row
-    uses. The Beta shelf is otherwise what it was."""
+def test_the_bd_crm_is_one_daily_row_above_lead_inbox_with_a_glyph_of_its_own(sidebar):
+    """#806 (spec #802) put ONE "BD CRM" row first under Beta, tagged BETA. Hanz, 2026-11-24, the day
+    RJ went live on it: "put the BD CRM to the sidebar not as beta". So it is a daily row under
+    Active, untagged, directly above Lead Inbox (outreach comes before the leads it brings in), still
+    the only row with the users glyph. The Beta shelf keeps the other four."""
     import re as _re
-    calls = _re.findall(r'navItem\("/bd/",\s*"([^"]+)",\s*"([^"]+)"(?:,\s*"([^"]+)")?\)', sidebar)
-    assert calls == [("users", "BD CRM", "BETA")], calls
+    calls = _re.findall(r'navItem\("/bd/",\s*"([^"]+)",\s*"([^"]+)"(?:,\s*"([^"]*)")?\)', sidebar)
+    assert calls == [("users", "BD CRM", "")], calls
     beta = _re.findall(r'navItem\("([^"]+)"[^)]*"BETA"\)', sidebar)
-    assert beta == ["/bd/", "/v2-board.html", "/polish-estimates.html", "/library.html",
-                    "/markup.html"], beta
+    assert beta == ["/v2-board.html", "/polish-estimates.html", "/library.html", "/markup.html"], beta
+    grouped, cur = {}, None
+    for m in _re.finditer(r'tw-section">([^<]+)</div>|navItem\("([^"]+)"', sidebar):
+        if m.group(1):
+            cur = m.group(1)
+        else:
+            grouped.setdefault(cur, []).append(m.group(2))
+    active = grouped["Active"]
+    assert "/bd/" in active and active.index("/bd/") + 1 == active.index("/leads.html"), active
     glyphs = [g for _, g, _ in _nav_labels(sidebar)]
     assert glyphs.count("users") == 1, glyphs
     icons = (FRONTEND / "js" / "icons.js").read_text(encoding="utf-8")

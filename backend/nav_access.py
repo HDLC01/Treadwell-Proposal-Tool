@@ -224,7 +224,7 @@ TABS: Dict[str, Dict[str, Any]] = {
         "api": (),
     },
     "/bd/": {
-        # THE BD CRM (#806, spec #802), the first Beta row: ONE tab for the whole of BD, keyed on the
+        # THE BD CRM (#806, spec #802), a daily row since 2026-11-24 (out of Beta): ONE tab for the whole of BD, keyed on the
         # sidebar row's href, the BD home page. It lists every BD page (BD_PAGES above, the folder
         # address too, because the browser asks for "/bd/" itself), so denying the tab refuses each
         # of them, and a page is covered the day it moves in rather than the day somebody remembers.

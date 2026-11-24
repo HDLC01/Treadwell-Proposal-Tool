@@ -30,6 +30,10 @@
       </div>
     </header>
 
+    <!-- The maintenance banner: "N maintenance accounts due this week" and Show, while the list being
+         looked at has open "Due now" rows. bd-week.js fills it; hidden while the page loads. -->
+    <section class="banner banner-info wk-due-banner" id="wk-due-banner" aria-labelledby="wk-due-banner-h" hidden></section>
+
     <div id="live" class="sr-only" role="status" aria-live="polite"></div>
 
     <section class="card wk-progress" id="summary" aria-label="Your progress">

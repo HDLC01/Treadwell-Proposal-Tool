@@ -1,6 +1,16 @@
 /* Contacts, /bd/contacts.html (#810: BD's contacts page, rebuilt as the approved mock-up's list of BD
- * accounts, restyled like the tool). Optional ?company=<id> (open that account), ?q= (a search) and
- * ?tab=maintenance.
+ * accounts, restyled like the tool). Optional ?company=<id> (open that account, on the page that holds
+ * it), ?q= (a search), ?tab=maintenance and ?page=N.
+ *
+ * 25 ACCOUNT ROWS A PAGE. A row is one company row; the people in an opened one do not count. The page
+ * still reads every account and splits the list itself, as Plan vs Actual's pager does (#819): under
+ * the list "1–25 of 256", Previous, the page numbers (with an ellipsis for a gap) and Next; on a phone
+ * Previous, "Page N of M", Next. Hidden when everything fits on one page. The page rides in the address
+ * (?page=, left out for page 1), so Refresh and Back keep the place; a page past the end shows the
+ * last. A new tab, search, filter or sort goes back to page 1; opening a row, a move, a merge or an
+ * Undo stays on the page (the last one, when that page is now empty). After a page change the top of
+ * the list comes into view, focus goes to its first row and "Page N of M" is said. The tab counts stay
+ * the totals.
  *
  * Two tabs, BD and Maintenance, each a list of companies ("BD accounts", Q19; the Maintenance tab is
  * grouped by company too since 2026-11-20, Q6). A company row says how many of that tab's people work
@@ -67,10 +77,12 @@
   var UNDO_MS = 10000;            // the toast's Undo; the server allows two minutes
   var UNDO_WINDOW_MS = 120000;    // the server's two minutes: the page's own Undo (#ct-moved) lasts this long
   var PAGE = 500;
+  var PAGE_ROWS = 25;             // the account rows a page of the list shows
+  var TOP_BAR = 52;               // the tool's fixed top bar (auth.js #tw-topbar): the list's top hides under it
 
   var S = {
     can: {}, me: null, today: "", ownList: false,
-    tab: "bd", lists: { bd: [], maintenance: [] }, loaded: false,
+    tab: "bd", lists: { bd: [], maintenance: [] }, loaded: false, page: 1, pageFirst: null,
     open: {}, sort: "name", chip: "all",
     q: "", hits: null, seq: 0, undo: null,
     unknown: null, unknownOpen: false, lastImport: null,
@@ -149,13 +161,27 @@
   }
 
   // ── the address ────────────────────────────────────────────────────────────────────────────
+  // The keys this page writes. ?company= is read once on load and dropped, so a Refresh keeps the
+  // page shown rather than jumping back to the company's. Any other key (the tool's d=) is kept.
+  var OWN_KEYS = ["tab", "q", "filter", "page", "company"];
+
   function syncUrl() {
     var p = [];
+    try {
+      p = String(window.location.search || "").replace(/^\?/, "").split("&").filter(function (piece) {
+        if (!piece) return false;
+        var k = piece.split("=")[0];
+        try { k = decodeURIComponent(k.replace(/\+/g, " ")); } catch (e) { /* as written */ }
+        return OWN_KEYS.indexOf(k) < 0;
+      });
+    } catch (e) { p = []; }
     if (S.tab !== "bd") p.push("tab=" + S.tab);
     if (S.q) p.push("q=" + encodeURIComponent(S.q));
     else if (S.tab === "bd" && S.chip === "dupes") p.push("filter=dupes");
+    if (S.page > 1) p.push("page=" + S.page);
     try {
-      window.history.replaceState(null, "", window.location.pathname + (p.length ? "?" + p.join("&") : ""));
+      window.history.replaceState(null, "", window.location.pathname + (p.length ? "?" + p.join("&") : "") +
+        (window.location.hash || ""));
     } catch (e) { /* the address just stays */ }
   }
 
@@ -442,11 +468,41 @@
       (act ? '<button type="button" class="btn" data-act="' + act + '">' + esc(label) + "</button>" : "") + "</div>";
   }
 
+  /** Previous, the page numbers (the one shown is aria-current="page"; a gap is an ellipsis), the
+   *  phone's "Page N of M" and Next; Previous and Next are disabled at the ends. */
+  function pagerHtml(pg) {
+    var btn = function (page, label, on, extra) {
+      return '<button type="button" class="btn btn-sm ct-pg' + (extra ? " ct-pg-num" : "") + '" data-page="' + esc(page) + '"' +
+        (on ? "" : ' disabled aria-disabled="true"') + (extra || "") + ">" + esc(label) + "</button>";
+    };
+    return '<span class="ct-range">' + esc(pg.text) + "</span>" +
+      '<span class="ct-pages">' + btn("prev", "Previous", pg.prev) +
+      pg.items.map(function (n) {
+        return typeof n !== "number"
+          ? '<span class="ct-pg-gap" aria-hidden="true">' + esc(n) + "</span>"
+          : btn(n, String(n), true, ' aria-label="Page ' + n + '"' + (n === pg.page ? ' aria-current="page"' : ""));
+      }).join("") +
+      '<span class="ct-pg-of">Page ' + esc(pg.page) + " of " + esc(pg.pages) + "</span>" +
+      btn("next", "Next", pg.next) + "</span>";
+  }
+
+  function renderPager(pg) {
+    var nav = $("ct-pager");
+    if (!nav) return;
+    nav.hidden = pg.pages < 2;
+    nav.innerHTML = nav.hidden ? "" : pagerHtml(pg);
+  }
+
   function renderList() {
     var box = $("ct-list");
     if (!box) return;
     box.setAttribute("aria-busy", "false");
-    var list = shown();
+    var every = shown();
+    // The page shown: a page past the end (a row moved away, a shorter search) is the last one.
+    var pg = BD.pageModel(every.length, S.page, PAGE_ROWS);
+    if (pg.page !== S.page) { S.page = pg.page; syncUrl(); }
+    var list = every.slice(pg.start, pg.end);
+    S.pageFirst = list[0] || null;
     var html;
     if (!S.lists[S.tab].length && !S.hits) {
       html = emptyHtml("users", S.tab === "bd" ? "No BD accounts yet." : "No maintenance accounts yet.");
@@ -460,7 +516,26 @@
         '<div class="ct-accts">' + list.map(function (a) { return accountHtml(a, S.tab); }).join("") + "</div>";
     }
     box.innerHTML = html;
+    renderPager(pg);
     renderCount();
+    return pg;
+  }
+
+  /** Page `n` of the list: written in the address, the top of the list brought into view (it sits
+   *  under the tool's top bar once scrolled past), focus on its first row, and "Page N of M" said. */
+  function goPage(n) {
+    if (!(n >= 1) || n === S.page) return;
+    S.page = n;
+    var pg = renderList();
+    syncUrl();
+    var box = $("ct-list");
+    if (box && box.getBoundingClientRect && box.getBoundingClientRect().top < TOP_BAR && box.scrollIntoView) {
+      box.scrollIntoView({ block: "start" });
+    }
+    var row = S.pageFirst && $("ct-a-" + S.tab + "-" + S.pageFirst.id);
+    if (row && row.focus) row.focus({ preventScroll: true });
+    else focusId("ct-tab-" + S.tab);
+    if (pg) BD.announce("Page " + pg.page + " of " + pg.pages);
   }
 
   // ── search ─────────────────────────────────────────────────────────────────────────────────
@@ -552,6 +627,7 @@
   function clearSearch() {
     var box = $("ct-q");
     if (box) box.value = "";
+    S.page = 1;
     search("");
     focusId("ct-q");
   }
@@ -905,6 +981,7 @@
   function pickTab(t, focus) {
     if (TABS.indexOf(t) === -1 || t === S.tab) return;
     S.tab = t;
+    S.page = 1;
     syncUrl();
     render();
     if (focus) focusId("ct-tab-" + t);
@@ -913,6 +990,7 @@
   function pickChip(k) {
     S.chip = S.chip === k || k === "all" || !chipOf(k) ? "all" : k;
     if (S.tab !== "bd") S.tab = "bd";
+    S.page = 1;
     syncUrl();
     render();
   }
@@ -930,15 +1008,36 @@
     var q = $("ct-q");
     if (q) {
       q.value = S.q;
-      var typed = BD.debounce(function () { search(q.value.trim()); }, 250);
+      // A new term goes back to page 1; a key that leaves the term as it was keeps the page.
+      var typed = BD.debounce(function () {
+        var v = q.value.trim();
+        if (v !== S.q) S.page = 1;
+        search(v);
+      }, 250);
       q.addEventListener("input", typed);
       q.addEventListener("keydown", function (e) { if (e.key === "Escape" && q.value) { e.preventDefault(); clearSearch(); } });
     }
     setHtml("ct-q-ico", ico("search", 18));
     var sel = $("ct-sort");
-    if (sel) sel.addEventListener("change", function () { S.sort = sortAllowed(sel.value) ? sel.value : "name"; renderList(); });
+    if (sel) {
+      sel.addEventListener("change", function () {
+        S.sort = sortAllowed(sel.value) ? sel.value : "name";
+        S.page = 1;                 // a new order is a new list: its first page
+        syncUrl();
+        renderList();
+      });
+    }
+    var pager = $("ct-pager");
+    if (pager) {
+      pager.addEventListener("click", function (e) {
+        var b = e.target.closest && e.target.closest("[data-page]");
+        if (!b || b.disabled) return;
+        var w = b.getAttribute("data-page");
+        goPage(w === "prev" ? S.page - 1 : (w === "next" ? S.page + 1 : Number(w)));
+      });
+    }
 
-    var tabs = document.querySelector ? document.querySelector(".ct-tabs") : null;
+    var tabs = $("ct-tabs");
     if (tabs) {
       tabs.addEventListener("click", function (e) {
         var b = e.target.closest && e.target.closest("[data-tab]");
@@ -1078,14 +1177,23 @@
     BD.note(note, words, "ct-note-panel");
   }
 
-  /** Opens the account ?company= names, on its tab, and brings it into view. A company on both tabs
-   *  opens on the tab the link names (?tab=), else on the first that holds it. */
+  /** Opens the account ?company= names, on its tab and the page of the list that holds it, and brings
+   *  it into view. A company on both tabs opens on the tab the link names (?tab=), else on the first
+   *  that holds it. */
   function openCompany(id) {
     var t = account(S.tab, id) ? S.tab : TABS.filter(function (x) { return !!account(x, id); })[0];
     if (!t) return null;
     S.tab = t;
     S.open[key(t, id)] = true;
+    // With a search in the link, the page comes from its hits once they arrive (pageOf after search).
+    if (!S.q) { var pg = pageOf(id); if (pg) S.page = pg; }
     return "ct-a-" + t + "-" + id;
+  }
+
+  /** The page of the list shown now that holds account `id`, or 0 when it is not in it. */
+  function pageOf(id) {
+    var at = shown().map(function (a) { return String(a.id); }).indexOf(String(id));
+    return at === -1 ? 0 : Math.floor(at / PAGE_ROWS) + 1;
   }
 
   var auth = window.TWAuth;
@@ -1103,6 +1211,7 @@
     show("ct-import", S.can["import"] === true);
     show("ct-add", S.can.add_contact === true);
     S.q = (BD.qs("q") || "").trim();
+    S.page = BD.pageParam(BD.qs("page"));
     if (BD.qs("tab") === "maintenance") S.tab = "maintenance";
     // ?filter=dupes opens the Possible duplicates view, for whoever has that chip; nothing else is read.
     if (S.tab === "bd" && BD.qs("filter") === "dupes" && chipOf("dupes")) S.chip = "dupes";
@@ -1110,8 +1219,19 @@
     wire();
     return Promise.all([loadLists(), loadExtras(), loadDupes()]).then(function () {
       var target = company ? openCompany(company) : null;
-      if (S.q) return search(S.q);
+      if (S.q) {
+        return search(S.q).then(function () {
+          var pg = target && S.hits ? pageOf(company) : 0;
+          if (!pg || pg === S.page) return;
+          S.page = pg;
+          render();
+          syncUrl();
+        });
+      }
       render();
+      // The address says the page shown: a company link drops company= (and names its page), and
+      // page=1 or a page= that is no page number goes. A page= that is the page shown is left alone.
+      if (company || BD.qs("page") !== (S.page > 1 ? String(S.page) : null)) syncUrl();
       var el = target && $(target);
       if (el && el.scrollIntoView) el.scrollIntoView({ block: "center" });
       return null;
