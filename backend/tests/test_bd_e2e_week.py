@@ -1673,3 +1673,30 @@ def test_on_a_phone_the_banner_wraps_and_show_is_reachable(page_as, expect, view
     show.click()
     pg.wait_for_function("() => document.activeElement && document.activeElement.id === 'wk-next'", timeout=5000)
     assert sideways(pg) <= 1
+
+
+def test_the_banner_is_absent_while_the_next_list_loads_and_on_its_load_error(page_as, expect):
+    """Spec point 1: no banner while a list loads or after it fails to. A manager on Avery's list (one
+    company due) switches to Blair's with the week fetch held: the banner is gone while it loads and
+    stays gone on Blair's list (nothing due). Switching back to Avery's with the fetch failing keeps
+    it gone. (Found by the independent verifier: removing hideBanner() from showLoading passed every
+    other banner test.)"""
+    banner = "#wk-due-banner"
+    _, pg = page_as("/bd/?owner=1", DEVON)
+    wait_week(pg)
+    expect(pg.locator(banner)).to_be_visible()
+    pg.evaluate("() => { window.__hold = false; window.__gate = new Promise(r => { window.__open = r; });"
+                " const get = BDApi.get; BDApi.get = (p, ...a) => window.__hold && p.indexOf('/api/bd/week') === 0"
+                " ? window.__gate.then(() => get.call(BDApi, p, ...a)) : get.call(BDApi, p, ...a); }")
+    pg.evaluate("() => { window.__hold = true; }")
+    pg.select_option("#owner-pick", "2")
+    expect(pg.locator(banner)).to_be_hidden()
+    pg.evaluate("() => { window.__open(); }")
+    expect(pg.locator("#wk-greeting")).to_have_text("Blair's week")
+    expect(pg.locator(banner)).to_be_hidden()
+    pg.evaluate("() => { const get = BDApi.get; BDApi.get = (p, ...a) => p.indexOf('/api/bd/week') === 0"
+                " ? Promise.reject(Object.assign(new Error('The BD database is not answering.'), {status: 503}))"
+                " : get.call(BDApi, p, ...a); }")
+    pg.select_option("#owner-pick", "1")
+    expect(pg.locator("#lists")).to_contain_text("not answering", timeout=15000)
+    expect(pg.locator(banner)).to_be_hidden()
