@@ -116,7 +116,9 @@ def test_the_sections_survive_a_removed_item(ran):
         assert e["section"], "%s lost its section heading" % e["href"]
     active = [e["href"] for e in user if e["section"] == "Active"]
     assert "/leads.html" not in active, "the denied row is still in the menu"
-    assert active == ["/portal.html", "/gc-projects.html", "/followups.html", "/crm.html",
+    # "/bd/" since 2026-11-24: the BD CRM left Beta for this list, directly above Lead Inbox (Hanz:
+    # "put the BD CRM to the sidebar not as beta"), so it now sits just before the denied row's hole.
+    assert active == ["/portal.html", "/gc-projects.html", "/followups.html", "/bd/", "/crm.html",
                       "/calendar.html", "/project-calendar.html", "/analytics.html",
                       "/projects.html", "/history.html", "/trash.html"], active
 
